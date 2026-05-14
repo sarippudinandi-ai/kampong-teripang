@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
-// Log env saat startup untuk debug
 console.log("[API] Supabase URL:", supabaseUrl ? supabaseUrl.substring(0, 40) + "..." : "MISSING");
 console.log("[API] Supabase Key:", supabaseKey ? supabaseKey.substring(0, 20) + "..." : "MISSING");
 
