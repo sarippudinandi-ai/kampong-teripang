@@ -4,8 +4,10 @@ import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { ArrowRight, Star } from "lucide-react";
+import { Suspense } from "react";
 import HeroSection from "@/components/HeroSection";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
+import { CalendarSkeleton } from "@/components/LoadingSkeletons";
 
 const pillars = [
   {
@@ -323,7 +325,9 @@ export default function HomePage() {
             viewport={{ once: true }}
             transition={{ duration: 0.8 }}
           >
-            <AvailabilityCalendar />
+            <Suspense fallback={<CalendarSkeleton />}>
+              <AvailabilityCalendar />
+            </Suspense>
           </motion.div>
         </div>
       </section>

@@ -1,44 +1,137 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { rateLimit, getClientIP } from "@/lib/rateLimit";
+
+// Rate limiter: max 5 booking attempts per minute per IP
+const limiter = rateLimit({
+  interval: 60 * 1000, // 60 seconds
+  uniqueTokenPerInterval: 500,
+});
+
+// Zod validation schema untuk booking
+const bookingSchema = z.object({
+  nama: z
+    .string()
+    .min(3, "Nama minimal 3 karakter")
+    .max(100, "Nama maksimal 100 karakter")
+    .regex(/^[a-zA-Z\s.]+$/, "Nama hanya boleh berisi huruf dan spasi"),
+  email: z
+    .string()
+    .email("Format email tidak valid")
+    .max(255, "Email terlalu panjang"),
+  no_wa: z
+    .string()
+    .regex(/^[0-9]{10,15}$/, "Nomor WhatsApp harus 10-15 digit angka"),
+  paket: z.string().min(1, "Paket harus dipilih"),
+  check_in: z
+    .string()
+    .refine((date) => {
+      const checkIn = new Date(date);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return checkIn >= today;
+    }, "Tanggal check-in tidak boleh di masa lalu"),
+  check_out: z
+    .string()
+    .refine((date) => {
+      const checkOut = new Date(date);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0);
+      return checkOut >= tomorrow;
+    }, "Tanggal check-out minimal 1 hari setelah check-in"),
+  tamu: z
+    .number()
+    .int("Jumlah tamu harus bilangan bulat")
+    .min(1, "Minimal 1 tamu")
+    .max(20, "Maksimal 20 tamu"),
+  catatan: z
+    .string()
+    .max(500, "Catatan maksimal 500 karakter")
+    .optional(),
+  total_bayar: z.number().positive("Total bayar harus lebih dari 0").optional(),
+  tipe_order: z.enum(["villa", "tour", "produk"]).optional(),
+});
+
+// Sanitasi string untuk mencegah XSS
+function sanitizeString(str: string): string {
+  return str
+    .trim()
+    .replace(/[<>]/g, "") // Remove < dan >
+    .replace(/javascript:/gi, "") // Remove javascript: protocol
+    .replace(/on\w+=/gi, ""); // Remove event handlers
+}
 
 export async function POST(req: NextRequest) {
   try {
+    // Rate limiting check
+    const ip = getClientIP(req.headers);
+    const rateLimitResult = limiter.check(5, `booking_${ip}`);
+
+    if (!rateLimitResult.success) {
+      return NextResponse.json(
+        {
+          error: "Terlalu banyak permintaan. Silakan coba lagi dalam 1 menit.",
+          remaining: 0,
+        },
+        { status: 429 }
+      );
+    }
+
     const body = await req.json();
 
-    const {
-      nama,
-      email,
-      no_wa,
-      paket,
-      check_in,
-      check_out,
-      tamu,
-      catatan,
-      total_bayar,
-      tipe_order,
-      tanggal,
-      peserta,
-    } = body;
+    // Validate with Zod
+    const validationResult = bookingSchema.safeParse(body);
 
-    // Validate required fields
-    if (!nama || !email || !no_wa || !total_bayar) {
+    if (!validationResult.success) {
+      const errors = validationResult.error.errors.map((err) => ({
+        field: err.path.join("."),
+        message: err.message,
+      }));
+
       return NextResponse.json(
-        { error: "Data tidak lengkap" },
+        {
+          error: "Validasi gagal",
+          details: errors,
+        },
         { status: 400 }
       );
     }
 
-    // Save to Supabase (uncomment when Supabase is configured)
+    const validated = validationResult.data;
+
+    // Additional validation: check-out must be after check-in
+    const checkInDate = new Date(validated.check_in);
+    const checkOutDate = new Date(validated.check_out);
+
+    if (checkOutDate <= checkInDate) {
+      return NextResponse.json(
+        { error: "Tanggal check-out harus setelah check-in" },
+        { status: 400 }
+      );
+    }
+
+    // Sanitize all string inputs
+    const sanitized = {
+      ...validated,
+      nama: sanitizeString(validated.nama),
+      email: sanitizeString(validated.email),
+      paket: sanitizeString(validated.paket),
+      catatan: validated.catatan ? sanitizeString(validated.catatan) : undefined,
+    };
+
+    // TODO: Save to Supabase (uncomment when ready)
     /*
     const { data, error } = await supabase
       .from("transactions")
       .insert({
-        nama_pemesan: nama,
-        email,
-        no_wa,
-        total_bayar,
+        nama_pemesan: sanitized.nama,
+        email: sanitized.email,
+        no_wa: sanitized.no_wa,
+        total_bayar: sanitized.total_bayar || 0,
         status_pembayaran: "pending",
-        tipe_order,
-        detail_order: body,
+        tipe_order: sanitized.tipe_order || "villa",
+        detail_order: sanitized,
       })
       .select()
       .single();
@@ -46,42 +139,20 @@ export async function POST(req: NextRequest) {
     if (error) throw error;
     */
 
-    // Xendit Payment (uncomment when Xendit is configured)
-    /*
-    const xenditResponse = await fetch("https://api.xendit.co/v2/invoices", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(process.env.XENDIT_SECRET_KEY + ":").toString("base64")}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        external_id: `booking-${Date.now()}`,
-        amount: total_bayar,
-        payer_email: email,
-        description: `Booking ${tipe_order} - ${paket}`,
-        customer: {
-          given_names: nama,
-          email,
-          mobile_number: no_wa,
-        },
-        success_redirect_url: `${process.env.NEXT_PUBLIC_BASE_URL}/payment/success`,
-        failure_redirect_url: `${process.env.NEXT_PUBLIC_BASE_URL}/payment/failed`,
-      }),
-    });
-    const xenditData = await xenditResponse.json();
-    return NextResponse.json({ payment_url: xenditData.invoice_url });
-    */
-
     // For now, return success (mock)
     return NextResponse.json({
       success: true,
       message: "Reservasi berhasil diterima",
       order_id: `ORD-${Date.now()}`,
+      data: sanitized,
     });
   } catch (error) {
     console.error("Booking error:", error);
     return NextResponse.json(
-      { error: "Terjadi kesalahan server" },
+      {
+        error: "Terjadi kesalahan server",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
       { status: 500 }
     );
   }

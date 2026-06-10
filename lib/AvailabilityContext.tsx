@@ -70,6 +70,7 @@ async function deleteDay(tanggal: string): Promise<boolean> {
 interface AvailabilityContextType {
   data: DayAvailability[];
   loading: boolean;
+  updating: boolean;
   source: string;
   updateDay: (day: DayAvailability) => Promise<void>;
   removeDay: (tanggal: string) => Promise<void>;
@@ -85,60 +86,177 @@ export function AvailabilityProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<DayAvailability[]>([]);
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState("init");
+  const [updating, setUpdating] = useState(false);
 
   const refresh = useCallback(async () => {
+    const abortController = new AbortController();
+    
     setLoading(true);
-    const result = await fetchAvailability();
-    setData(result.data);
-    setSource(result.source);
-    setLoading(false);
+    try {
+      const result = await fetchAvailability();
+      
+      // Check if component is still mounted
+      if (!abortController.signal.aborted) {
+        setData(result.data);
+        setSource(result.source);
+      }
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        console.error('[Availability] Refresh error:', error);
+        setSource('error');
+      }
+    } finally {
+      if (!abortController.signal.aborted) {
+        setLoading(false);
+      }
+    }
+    
+    return () => {
+      abortController.abort();
+    };
   }, []);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    let mounted = true;
+    const controller = new AbortController();
+
+    const loadData = async () => {
+      if (!mounted) return;
+      
+      setLoading(true);
+      try {
+        const result = await fetchAvailability();
+        
+        if (mounted && !controller.signal.aborted) {
+          setData(result.data);
+          setSource(result.source);
+        }
+      } catch (error) {
+        if (mounted && !controller.signal.aborted) {
+          console.error('[Availability] Initial load error:', error);
+          setSource('error');
+        }
+      } finally {
+        if (mounted && !controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadData();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
 
   const updateDay = useCallback(async (day: DayAvailability) => {
+    // Prevent concurrent updates
+    if (updating) {
+      console.warn('[Availability] Update already in progress, skipping');
+      return;
+    }
+
+    setUpdating(true);
+
     const hasBooking = day.rooms.some(
       (r) => r.status === "terpesan" || r.status === "maintenance"
     );
 
-    // Optimistic update dulu
-    setData((prev) => {
-      const filtered = prev.filter((d) => d.tanggal !== day.tanggal);
-      return hasBooking ? [...filtered, day] : filtered;
-    });
+    // Save previous state for rollback
+    const previousData = [...data];
 
-    // Simpan ke DB
-    let ok: boolean;
-    if (hasBooking) {
-      ok = await upsertDay(day);
-    } else {
-      ok = await deleteDay(day.tanggal);
-    }
+    try {
+      // Optimistic update
+      setData((prev) => {
+        const filtered = prev.filter((d) => d.tanggal !== day.tanggal);
+        return hasBooking ? [...filtered, day] : filtered;
+      });
 
-    // Kalau gagal, refresh dari DB untuk konsistensi
-    if (!ok) {
-      console.warn("[Availability] Save failed, refreshing from DB...");
+      // Attempt to save to DB
+      let success: boolean;
+      if (hasBooking) {
+        success = await upsertDay(day);
+      } else {
+        success = await deleteDay(day.tanggal);
+      }
+
+      if (!success) {
+        throw new Error('Failed to save to database');
+      }
+
+      console.log('[Availability] Update successful:', day.tanggal);
+    } catch (error) {
+      console.error('[Availability] Update failed, rolling back:', error);
+      
+      // Rollback to previous state
+      setData(previousData);
+      
+      // Refresh from DB to ensure consistency
       await refresh();
+      
+      throw error; // Re-throw untuk error handling di component
+    } finally {
+      setUpdating(false);
     }
-  }, [refresh]);
+  }, [data, updating, refresh]);
 
   const removeDay = useCallback(async (tanggal: string) => {
-    setData((prev) => prev.filter((d) => d.tanggal !== tanggal));
-    const ok = await deleteDay(tanggal);
-    if (!ok) await refresh();
-  }, [refresh]);
+    if (updating) {
+      console.warn('[Availability] Update in progress, skipping delete');
+      return;
+    }
+
+    setUpdating(true);
+    const previousData = [...data];
+
+    try {
+      // Optimistic update
+      setData((prev) => prev.filter((d) => d.tanggal !== tanggal));
+      
+      const success = await deleteDay(tanggal);
+      
+      if (!success) {
+        throw new Error('Failed to delete from database');
+      }
+    } catch (error) {
+      console.error('[Availability] Delete failed, rolling back:', error);
+      setData(previousData);
+      await refresh();
+    } finally {
+      setUpdating(false);
+    }
+  }, [data, updating, refresh]);
 
   const resetAll = useCallback(async () => {
-    const current = [...data];
-    setData([]);
-    await Promise.all(current.map((d) => deleteDay(d.tanggal)));
-  }, [data]);
+    if (updating) {
+      console.warn('[Availability] Update in progress, skipping reset');
+      return;
+    }
+
+    setUpdating(true);
+    const previousData = [...data];
+
+    try {
+      // Optimistic update
+      setData([]);
+      
+      // Delete all from DB
+      await Promise.all(previousData.map((d) => deleteDay(d.tanggal)));
+      
+      console.log('[Availability] Reset complete');
+    } catch (error) {
+      console.error('[Availability] Reset failed:', error);
+      setData(previousData);
+    } finally {
+      setUpdating(false);
+    }
+  }, [data, updating]);
 
   return (
     <AvailabilityContext.Provider
-      value={{ data, loading, source, updateDay, removeDay, resetAll, refresh }}
+      value={{ data, loading, updating, source, updateDay, removeDay, resetAll, refresh }}
     >
       {children}
     </AvailabilityContext.Provider>

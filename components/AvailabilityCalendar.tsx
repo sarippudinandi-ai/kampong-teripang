@@ -25,7 +25,7 @@ interface Props {
 }
 
 export default function AvailabilityCalendar({ isAdmin = false }: Props) {
-  const { data, updateDay, removeDay, loading, source, refresh } = useAvailability();
+  const { data, updateDay, removeDay, loading, source, refresh, updating } = useAvailability();
 
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -80,22 +80,35 @@ export default function AvailabilityCalendar({ isAdmin = false }: Props) {
   };
 
   const handleSave = async () => {
-    if (!selectedDate) return;
+    if (!selectedDate || saving || updating) return;
+    
     setSaving(true);
-    await updateDay({ tanggal: selectedDate, rooms: editRooms });
-    // Refresh dari DB untuk konfirmasi data tersimpan
-    await refresh();
-    setSaving(false);
-    setSelectedDate(null);
+    try {
+      await updateDay({ tanggal: selectedDate, rooms: editRooms });
+      // Refresh dari DB untuk konfirmasi data tersimpan
+      await refresh();
+      setSelectedDate(null);
+    } catch (error) {
+      console.error('[Calendar] Save failed:', error);
+      // Error sudah di-handle di context (rollback otomatis)
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleClear = async () => {
-    if (!selectedDate) return;
+    if (!selectedDate || saving || updating) return;
+    
     setSaving(true);
-    await removeDay(selectedDate);
-    await refresh();
-    setSaving(false);
-    setSelectedDate(null);
+    try {
+      await removeDay(selectedDate);
+      await refresh();
+      setSelectedDate(null);
+    } catch (error) {
+      console.error('[Calendar] Clear failed:', error);
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Warna sel ──────────────────────────────────────────────────────────────
@@ -343,13 +356,24 @@ export default function AvailabilityCalendar({ isAdmin = false }: Props) {
           ))}
 
           <div className="px-4 py-3 bg-white/3 flex gap-2">
-            <button onClick={handleSave} disabled={saving} className="btn-gold flex-1 py-2 rounded-lg text-sm font-semibold disabled:opacity-60">
-              {saving ? "Menyimpan..." : "✓ Simpan ke Database"}
+            <button 
+              onClick={handleSave} 
+              disabled={saving || updating} 
+              className="btn-gold flex-1 py-2 rounded-lg text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {saving || updating ? "Menyimpan..." : "✓ Simpan ke Database"}
             </button>
-            <button onClick={handleClear} disabled={saving} className="bg-red-500/20 border border-red-500/30 text-red-400 px-4 py-2 rounded-lg text-sm hover:bg-red-500/30 transition-colors disabled:opacity-60">
+            <button 
+              onClick={handleClear} 
+              disabled={saving || updating} 
+              className="bg-red-500/20 border border-red-500/30 text-red-400 px-4 py-2 rounded-lg text-sm hover:bg-red-500/30 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
               Reset
             </button>
-            <button onClick={() => setSelectedDate(null)} className="glass text-white/50 px-4 py-2 rounded-lg text-sm hover:text-white transition-colors">
+            <button 
+              onClick={() => setSelectedDate(null)} 
+              className="glass text-white/50 px-4 py-2 rounded-lg text-sm hover:text-white transition-colors"
+            >
               Batal
             </button>
           </div>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import dynamic from "next/dynamic";
 import Providers from "@/components/Providers";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const Navbar = dynamic(() => import("@/components/Navbar"), { ssr: false });
 const Footer = dynamic(() => import("@/components/Footer"), { ssr: false });
@@ -44,12 +45,14 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-ocean-deep text-white antialiased">
-        <Providers>
-          <Navbar />
-          <main>{children}</main>
-          <Footer />
-          <WhatsAppButton />
-        </Providers>
+        <ErrorBoundary>
+          <Providers>
+            <Navbar />
+            <main>{children}</main>
+            <Footer />
+            <WhatsAppButton />
+          </Providers>
+        </ErrorBoundary>
       </body>
     </html>
   );

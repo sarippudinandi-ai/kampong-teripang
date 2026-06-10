@@ -1,53 +1,110 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { rateLimit, getClientIP } from "@/lib/rateLimit";
+
+// Rate limiter
+const limiter = rateLimit({
+  interval: 60 * 1000,
+  uniqueTokenPerInterval: 500,
+});
+
+// Zod validation schema
+const checkoutItemSchema = z.object({
+  id: z.string(),
+  nama: z.string(),
+  harga: z.number().positive(),
+  qty: z.number().int().positive().max(100),
+});
+
+const checkoutSchema = z.object({
+  nama: z
+    .string()
+    .min(3, "Nama minimal 3 karakter")
+    .max(100, "Nama maksimal 100 karakter")
+    .regex(/^[a-zA-Z\s.]+$/, "Nama hanya boleh berisi huruf dan spasi"),
+  email: z.string().email("Format email tidak valid"),
+  no_wa: z.string().regex(/^[0-9]{10,15}$/, "Nomor WhatsApp tidak valid"),
+  alamat: z
+    .string()
+    .min(10, "Alamat minimal 10 karakter")
+    .max(500, "Alamat maksimal 500 karakter"),
+  items: z
+    .array(checkoutItemSchema)
+    .min(1, "Minimal 1 item")
+    .max(20, "Maksimal 20 item"),
+  total_bayar: z.number().positive(),
+  tipe_order: z.literal("produk").optional(),
+});
+
+function sanitizeString(str: string): string {
+  return str
+    .trim()
+    .replace(/[<>]/g, "")
+    .replace(/javascript:/gi, "")
+    .replace(/on\w+=/gi, "");
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { nama, email, no_wa, alamat, items, total_bayar, tipe_order } = body;
+    // Rate limiting
+    const ip = getClientIP(req.headers);
+    const rateLimitResult = limiter.check(5, `checkout_${ip}`);
 
-    if (!nama || !email || !no_wa || !items || !total_bayar) {
+    if (!rateLimitResult.success) {
       return NextResponse.json(
-        { error: "Data tidak lengkap" },
+        { error: "Terlalu banyak permintaan. Coba lagi dalam 1 menit." },
+        { status: 429 }
+      );
+    }
+
+    const body = await req.json();
+
+    // Validate
+    const validationResult = checkoutSchema.safeParse(body);
+
+    if (!validationResult.success) {
+      const errors = validationResult.error.errors.map((err) => ({
+        field: err.path.join("."),
+        message: err.message,
+      }));
+
+      return NextResponse.json(
+        { error: "Validasi gagal", details: errors },
         { status: 400 }
       );
     }
 
-    // Xendit Invoice (uncomment when configured)
-    /*
-    const xenditResponse = await fetch("https://api.xendit.co/v2/invoices", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(process.env.XENDIT_SECRET_KEY + ":").toString("base64")}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        external_id: `order-${Date.now()}`,
-        amount: total_bayar,
-        payer_email: email,
-        description: `Pembelian Produk Housome Store`,
-        customer: {
-          given_names: nama,
-          email,
-          mobile_number: no_wa,
-          addresses: [{ street_line1: alamat, country: "ID" }],
-        },
-        items: items.map((item: { nama: string; harga: number; qty: number }) => ({
-          name: item.nama,
-          quantity: item.qty,
-          price: item.harga,
-        })),
-        success_redirect_url: `${process.env.NEXT_PUBLIC_BASE_URL}/payment/success`,
-        failure_redirect_url: `${process.env.NEXT_PUBLIC_BASE_URL}/payment/failed`,
-      }),
-    });
-    const xenditData = await xenditResponse.json();
-    return NextResponse.json({ payment_url: xenditData.invoice_url });
-    */
+    const validated = validationResult.data;
+
+    // Verify total_bayar calculation
+    const calculatedTotal = validated.items.reduce(
+      (sum, item) => sum + item.harga * item.qty,
+      0
+    );
+
+    if (Math.abs(calculatedTotal - validated.total_bayar) > 1) {
+      return NextResponse.json(
+        { error: "Total pembayaran tidak sesuai dengan item" },
+        { status: 400 }
+      );
+    }
+
+    // Sanitize
+    const sanitized = {
+      ...validated,
+      nama: sanitizeString(validated.nama),
+      email: sanitizeString(validated.email),
+      alamat: sanitizeString(validated.alamat),
+    };
+
+    // TODO: Save to database
+    // TODO: Xendit payment integration
 
     return NextResponse.json({
       success: true,
       message: "Pesanan berhasil diterima",
       order_id: `SHOP-${Date.now()}`,
+      data: sanitized,
     });
   } catch (error) {
     console.error("Checkout error:", error);

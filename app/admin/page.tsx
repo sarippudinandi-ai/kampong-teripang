@@ -50,14 +50,12 @@ const initialProducts: Product[] = [
   { id: "forayya", nama: "Forayya", harga: 320000, stok: 40, tagline: "Sea Collagen Skincare Serum" },
 ];
 
-// ─── Password sederhana ───────────────────────────────────
-const ADMIN_PASSWORD = "melamun2024";
-
 export default function AdminPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
 
   const [villa, setVilla] = useState<VillaPackage[]>(initialVilla);
   const [edu, setEdu] = useState<EduPackage[]>(initialEdu);
@@ -72,13 +70,40 @@ export default function AdminPage() {
   const [waNumber, setWaNumber] = useState("6283161259104");
   const [adminName, setAdminName] = useState("MeLamun Villa");
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === ADMIN_PASSWORD) {
-      setAuthenticated(true);
-      setAuthError("");
-    } else {
-      setAuthError("Password salah. Coba lagi.");
+    setLoggingIn(true);
+    setAuthError("");
+
+    try {
+      const response = await fetch("/api/admin/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.valid) {
+        setAuthenticated(true);
+        setPassword(""); // Clear password from memory
+      } else {
+        setAuthError(data.error || "Password salah. Coba lagi.");
+      }
+    } catch (error) {
+      console.error("Login error:", error);
+      setAuthError("Terjadi kesalahan. Silakan coba lagi.");
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/admin/verify", { method: "DELETE" });
+      setAuthenticated(false);
+    } catch (error) {
+      console.error("Logout error:", error);
     }
   };
 
@@ -126,9 +151,10 @@ export default function AdminPage() {
             )}
             <button
               type="submit"
-              className="btn-gold w-full py-3 rounded-xl font-semibold"
+              disabled={loggingIn}
+              className="btn-gold w-full py-3 rounded-xl font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Masuk
+              {loggingIn ? "Memverifikasi..." : "Masuk"}
             </button>
           </form>
           <p className="text-white/20 text-xs text-center mt-6">
@@ -166,7 +192,7 @@ export default function AdminPage() {
               <Save size={16} /> Simpan Perubahan
             </button>
             <button
-              onClick={() => setAuthenticated(false)}
+              onClick={handleLogout}
               className="glass px-4 py-2.5 rounded-full text-sm text-white/60 hover:text-white transition-colors"
             >
               Keluar
