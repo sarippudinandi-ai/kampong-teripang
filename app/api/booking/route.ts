@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { rateLimit, getClientIP } from "@/lib/rateLimit";
+import { createClient } from "@supabase/supabase-js";
+
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 // Rate limiter: max 5 booking attempts per minute per IP
 const limiter = rateLimit({
@@ -23,6 +30,7 @@ const bookingSchema = z.object({
     .string()
     .regex(/^[0-9]{10,15}$/, "Nomor WhatsApp harus 10-15 digit angka"),
   paket: z.string().min(1, "Paket harus dipilih"),
+  room_id: z.string().uuid("Invalid room ID").optional(), // New: specific room selection
   check_in: z
     .string()
     .refine((date) => {
@@ -120,9 +128,78 @@ export async function POST(req: NextRequest) {
       catatan: validated.catatan ? sanitizeString(validated.catatan) : undefined,
     };
 
-    // TODO: Save to Supabase (uncomment when ready)
-    /*
-    const { data, error } = await supabase
+    // NEW: Check room availability if room_id provided
+    let selectedRoomId = sanitized.room_id;
+
+    if (!selectedRoomId) {
+      // Auto-assign available room based on package type
+      const roomTypeMap: Record<string, string> = {
+        "villa-standard": "standard",
+        "villa-deluxe": "deluxe",
+        "villa-family": "family",
+      };
+
+      const roomType = roomTypeMap[sanitized.paket];
+
+      if (roomType) {
+        // Call Supabase function to get available rooms
+        const { data: availableRooms, error: availError } = await supabase.rpc(
+          "get_available_rooms",
+          {
+            p_check_in: sanitized.check_in,
+            p_check_out: sanitized.check_out,
+            p_room_type: roomType,
+          }
+        );
+
+        if (availError) {
+          console.error("[Booking API] Error checking availability:", availError);
+          return NextResponse.json(
+            {
+              error: "Gagal mengecek ketersediaan kamar",
+              details: availError.message,
+            },
+            { status: 500 }
+          );
+        }
+
+        if (!availableRooms || availableRooms.length === 0) {
+          return NextResponse.json(
+            {
+              error: "Tidak ada kamar tersedia untuk tanggal yang dipilih",
+              suggestion: "Silakan pilih tanggal lain atau hubungi admin",
+            },
+            { status: 409 }
+          );
+        }
+
+        // Assign first available room
+        selectedRoomId = availableRooms[0].room_id;
+      }
+    } else {
+      // Verify specific room is available
+      const { data: isAvailable, error: checkError } = await supabase.rpc(
+        "check_room_availability",
+        {
+          p_room_id: selectedRoomId,
+          p_check_in: sanitized.check_in,
+          p_check_out: sanitized.check_out,
+        }
+      );
+
+      if (checkError || !isAvailable) {
+        return NextResponse.json(
+          {
+            error: "Kamar yang dipilih tidak tersedia untuk tanggal tersebut",
+            suggestion: "Silakan pilih kamar atau tanggal lain",
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    // Save to Supabase transactions table
+    const { data: transaction, error: insertError } = await supabase
       .from("transactions")
       .insert({
         nama_pemesan: sanitized.nama,
@@ -130,24 +207,58 @@ export async function POST(req: NextRequest) {
         no_wa: sanitized.no_wa,
         total_bayar: sanitized.total_bayar || 0,
         status_pembayaran: "pending",
+        booking_status: "inquiry", // Initial status
         tipe_order: sanitized.tipe_order || "villa",
-        detail_order: sanitized,
+        room_id: selectedRoomId,
+        check_in: sanitized.check_in,
+        check_out: sanitized.check_out,
+        guest_count: sanitized.tamu,
+        detail_order: {
+          paket: sanitized.paket,
+          catatan: sanitized.catatan,
+          ip_address: ip,
+        },
       })
       .select()
       .single();
 
-    if (error) throw error;
-    */
+    if (insertError) {
+      console.error("[Booking API] Error creating transaction:", insertError);
+      return NextResponse.json(
+        {
+          error: "Gagal membuat reservasi",
+          details: insertError.message,
+        },
+        { status: 500 }
+      );
+    }
 
-    // For now, return success (mock)
+    // Log to audit trail
+    await supabase.from("booking_audit_log").insert({
+      transaction_id: transaction.id,
+      action: "created",
+      old_status: null,
+      new_status: "inquiry",
+      changed_by: "system",
+      notes: "Booking created from public website",
+      metadata: {
+        ip_address: ip,
+        user_agent: req.headers.get("user-agent") || "unknown",
+      },
+    });
+
     return NextResponse.json({
       success: true,
-      message: "Reservasi berhasil diterima",
-      order_id: `ORD-${Date.now()}`,
-      data: sanitized,
+      message: "Reservasi berhasil diterima. Admin akan menghubungi Anda segera.",
+      order_id: transaction.id,
+      booking_code: `KM-${transaction.id.slice(0, 8).toUpperCase()}`,
+      data: {
+        ...sanitized,
+        room_id: selectedRoomId,
+      },
     });
   } catch (error) {
-    console.error("Booking error:", error);
+    console.error("[Booking API] Unexpected error:", error);
     return NextResponse.json(
       {
         error: "Terjadi kesalahan server",
