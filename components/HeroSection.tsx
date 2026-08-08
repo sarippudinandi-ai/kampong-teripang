@@ -67,8 +67,10 @@ export default function HeroSection() {
               alt={slide.label}
               fill
               className="object-cover"
-              priority={i === 0}
-              sizes="100vw"
+              priority={i === 0} // Hero pertama prioritas tinggi
+              fetchPriority={i === 0 ? "high" : "low"} // Eksplisit prioritas fetch
+              quality={85}
+              sizes="100vw" // Gambar hero full viewport
             />
           </motion.div>
           <div className="absolute inset-0 bg-gradient-to-r from-ocean-deep/80 via-ocean-deep/40 to-transparent" />
@@ -153,6 +155,8 @@ export default function HeroSection() {
                   width={200}
                   height={250}
                   className="w-full h-full object-cover"
+                  sizes="(max-width: 1024px) 0vw, 200px" // Hidden di mobile, fixed size di desktop
+                  loading="lazy"
                 />
               </motion.div>
             ))}
@@ -164,7 +168,7 @@ export default function HeroSection() {
       <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex items-center gap-4">
         <button
           onClick={prevSlide}
-          className="w-9 h-9 rounded-full glass flex items-center justify-center text-white hover:bg-white/20 transition-all"
+          className="w-11 h-11 rounded-full glass flex items-center justify-center text-white hover:bg-white/20 transition-all"
           aria-label="Previous slide"
         >
           <ChevronLeft size={18} />
@@ -174,16 +178,21 @@ export default function HeroSection() {
             <button
               key={i}
               onClick={() => setCurrentSlide(i)}
-              className={`transition-all rounded-full ${
-                i === currentSlide ? "w-8 h-1.5 bg-sand" : "w-1.5 h-1.5 bg-white/40"
-              }`}
+              className="p-3 group" // Padding transparan untuk area sentuh 48x48px
               aria-label={`Go to slide ${i + 1}`}
-            />
+              aria-current={i === currentSlide ? "true" : "false"}
+            >
+              <span
+                className={`block transition-all rounded-full ${
+                  i === currentSlide ? "w-8 h-1.5 bg-sand" : "w-1.5 h-1.5 bg-white/40 group-hover:bg-white/60"
+                }`}
+              />
+            </button>
           ))}
         </div>
         <button
           onClick={nextSlide}
-          className="w-9 h-9 rounded-full glass flex items-center justify-center text-white hover:bg-white/20 transition-all"
+          className="w-11 h-11 rounded-full glass flex items-center justify-center text-white hover:bg-white/20 transition-all"
           aria-label="Next slide"
         >
           <ChevronRight size={18} />

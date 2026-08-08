@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Inter, Cormorant_Garamond } from "next/font/google";
 import "./globals.css";
 import dynamic from "next/dynamic";
 import Providers from "@/components/Providers";
@@ -7,6 +8,24 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 const Navbar = dynamic(() => import("@/components/Navbar"), { ssr: false });
 const Footer = dynamic(() => import("@/components/Footer"), { ssr: false });
 const WhatsAppButton = dynamic(() => import("@/components/WhatsAppButton"), { ssr: false });
+
+// Optimized font loading dengan next/font/google
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
+  variable: "--font-inter",
+  display: "swap", // Mencegah FOUT (Flash of Unstyled Text)
+  preload: true,
+});
+
+const cormorant = Cormorant_Garamond({
+  subsets: ["latin"],
+  weight: ["300", "400", "600"],
+  style: ["normal", "italic"],
+  variable: "--font-cormorant",
+  display: "swap",
+  preload: true,
+});
 
 export const metadata: Metadata = {
   title: "MeLamun Kelong Villa | Kampong Teripang Bintan",
@@ -31,19 +50,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="id">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Inter:wght@300;400;500;600&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html lang="id" className={`${inter.variable} ${cormorant.variable}`}>
       <body className="bg-ocean-deep text-white antialiased">
         <ErrorBoundary>
           <Providers>

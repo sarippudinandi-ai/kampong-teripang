@@ -2,6 +2,14 @@
 
 import Link from "next/link";
 import { MapPin, Phone, Mail } from "lucide-react";
+import { useSiteConfig } from "@/lib/useSiteConfig";
+
+function formatWaDisplay(num: string): string {
+  // 6283161259104 -> +62 831-6125-9104 (best-effort, falls back to +<num>)
+  if (!num) return "";
+  const m = num.match(/^(\d{2})(\d{3})(\d{4})(\d+)$/);
+  return m ? `+${m[1]} ${m[2]}-${m[3]}-${m[4]}` : `+${num}`;
+}
 
 function InstagramIcon() {
   return (
@@ -23,6 +31,7 @@ function YoutubeIcon() {
 }
 
 export default function Footer() {
+  const { whatsapp_number } = useSiteConfig();
   return (
     <footer className="bg-ocean-deep border-t border-white/10">
       <div className="max-w-6xl mx-auto px-8 sm:px-14 lg:px-24 py-16">
@@ -99,10 +108,10 @@ export default function Footer() {
               <li className="flex items-center gap-3 text-white/60 text-sm">
                 <Phone size={16} className="text-sand shrink-0" />
                 <a
-                  href="https://wa.me/6283161259104"
+                  href={`https://wa.me/${whatsapp_number}`}
                   className="hover:text-sand transition-colors"
                 >
-                  +62 831-6125-9104
+                  {formatWaDisplay(whatsapp_number)}
                 </a>
               </li>
               <li className="flex items-center gap-3 text-white/60 text-sm">
@@ -120,19 +129,19 @@ export default function Footer() {
 
         {/* Bottom Bar */}
         <div className="border-t border-white/10 mt-12 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-          <p className="text-white/40 text-xs">
+          <p className="text-white/70 text-xs">
             © 2024 MeLamun Kelong Villa · Kampong Teripang. All rights reserved.
           </p>
           <div className="flex gap-6">
             <Link
               href="/privacy"
-              className="text-white/40 hover:text-white/60 text-xs transition-colors"
+              className="text-white/70 hover:text-white/90 text-xs transition-colors"
             >
               Privacy Policy
             </Link>
             <Link
               href="/terms"
-              className="text-white/40 hover:text-white/60 text-xs transition-colors"
+              className="text-white/70 hover:text-white/90 text-xs transition-colors"
             >
               Terms of Service
             </Link>

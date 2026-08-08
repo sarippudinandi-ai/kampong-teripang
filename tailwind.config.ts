@@ -24,8 +24,8 @@ const config: Config = {
         cream: "#f5f0e8",
       },
       fontFamily: {
-        serif: ["Cormorant Garamond", "Georgia", "serif"],
-        sans: ["Inter", "system-ui", "sans-serif"],
+        serif: ["var(--font-cormorant)", "Cormorant Garamond", "Georgia", "serif"],
+        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
       },
       maxWidth: {
         // Container utama lebih sempit supaya ada ruang di kiri kanan

@@ -140,6 +140,8 @@ export default function HomePage() {
                   width={400}
                   height={300}
                   className="w-full h-full object-cover"
+                  sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 400px"
+                  loading="lazy"
                 />
               </div>
               <div className="img-zoom rounded-2xl overflow-hidden h-64 mt-8">
@@ -149,6 +151,8 @@ export default function HomePage() {
                   width={400}
                   height={300}
                   className="w-full h-full object-cover"
+                  sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 400px"
+                  loading="lazy"
                 />
               </div>
             </div>
@@ -194,7 +198,9 @@ export default function HomePage() {
                       alt={pillar.title}
                       fill
                       className="object-cover transition-transform duration-700 group-hover:scale-110"
-                      sizes="(max-width: 768px) 100vw, 33vw"
+                      sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                      loading="lazy"
+                      quality={80}
                     />
                     <div className={`absolute inset-0 bg-gradient-to-t ${pillar.color} to-transparent`} />
                     <div className="absolute inset-0 p-8 flex flex-col justify-end">
@@ -235,6 +241,7 @@ export default function HomePage() {
                 fill
                 className="object-cover"
                 sizes="(max-width: 1024px) 100vw, 50vw"
+                loading="lazy"
               />
             </div>
             <div className="absolute bottom-8 left-8 right-8 glass rounded-2xl p-6">
@@ -389,6 +396,7 @@ export default function HomePage() {
             fill
             className="object-cover"
             sizes="100vw"
+            loading="lazy"
           />
           <div className="absolute inset-0 bg-ocean-deep/75" />
         </div>
