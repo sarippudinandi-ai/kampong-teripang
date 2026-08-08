@@ -56,13 +56,29 @@ export default function RootLayout({
   return (
     <html lang="id" className={`${inter.variable} ${cormorant.variable}`}>
       <head>
-        {/* HOTFIX: Preload hero image untuk instant LCP */}
+        {/* MOBILE HOTFIX: DNS prefetch untuk faster connection */}
+        <link rel="dns-prefetch" href="https://images.unsplash.com" />
+        
+        {/* MOBILE HOTFIX: Preconnect critical origins */}
+        <link rel="preconnect" href="https://images.unsplash.com" crossOrigin="anonymous" />
+        <link rel="preconnect" href="https://qcpubikuhjnjdytqwach.supabase.co" crossOrigin="anonymous" />
+        
+        {/* MOBILE HOTFIX: Preload hero image untuk instant LCP */}
         <link
           rel="preload"
           as="image"
-          href="https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=1920&q=85&fm=webp"
+          href="https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=828&q=65&fm=webp"
           type="image/webp"
           fetchPriority="high"
+          media="(max-width: 828px)"
+        />
+        <link
+          rel="preload"
+          as="image"
+          href="https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=1920&q=75&fm=webp"
+          type="image/webp"
+          fetchPriority="high"
+          media="(min-width: 829px)"
         />
       </head>
       <body className="bg-ocean-deep text-white antialiased">

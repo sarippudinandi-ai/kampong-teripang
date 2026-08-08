@@ -30,20 +30,33 @@ const heroSlides = [
 
 export default function HeroSection() {
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
   const heroRef = useRef<HTMLDivElement>(null);
+  
+  // MOBILE: Detect mobile device
+  useEffect(() => {
+    setIsMobile(window.innerWidth < 768);
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  
   const { scrollYProgress } = useScroll({
     target: heroRef,
     offset: ["start start", "end start"],
   });
-  const heroY = useTransform(scrollYProgress, [0, 1], ["0%", "30%"]);
+  
+  // MOBILE: Disable parallax on mobile untuk save CPU
+  const heroY = useTransform(scrollYProgress, [0, 1], isMobile ? ["0%", "0%"] : ["0%", "30%"]);
   const heroOpacity = useTransform(scrollYProgress, [0, 0.8], [1, 0]);
 
+  // MOBILE HOTFIX: Slower transitions on mobile to reduce CPU load
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentSlide((prev) => (prev + 1) % heroSlides.length);
-    }, 6000);
+    }, isMobile ? 8000 : 6000); // MOBILE: 8s instead of 6s
     return () => clearInterval(timer);
-  }, []);
+  }, [isMobile]);
 
   const prevSlide = () =>
     setCurrentSlide((prev) => (prev - 1 + heroSlides.length) % heroSlides.length);
@@ -59,14 +72,17 @@ export default function HeroSection() {
           className="absolute inset-0"
           initial={{ opacity: 0 }}
           animate={{ opacity: i === currentSlide ? 1 : 0 }}
-          transition={{ duration: 1.2, ease: "easeInOut" }}
-          style={{ willChange: i === currentSlide ? "opacity" : "auto" }} // HOTFIX: GPU hint
+          transition={{ 
+            duration: isMobile ? 1.5 : 1.2, // MOBILE: Slightly faster transition
+            ease: "easeInOut" 
+          }}
+          style={{ willChange: i === currentSlide ? "opacity" : "auto" }}
         >
           <motion.div 
             className="absolute inset-0" 
             style={{ 
-              y: heroY,
-              willChange: "transform", // HOTFIX: Force GPU compositing
+              y: heroY, // MOBILE: Disabled via useTransform above
+              willChange: isMobile ? "auto" : "transform",
             }}
           >
             <Image
@@ -76,10 +92,10 @@ export default function HeroSection() {
               className="object-cover"
               priority={i === 0}
               fetchPriority={i === 0 ? "high" : "low"}
-              quality={75} // HOTFIX: Reduce quality untuk faster load (was 85)
+              quality={isMobile ? 65 : 75} // MOBILE: 65 vs Desktop: 75
               sizes="100vw"
               placeholder="blur"
-              blurDataURL="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiMwYTJhMmEiLz48L3N2Zz4=" // HOTFIX: Blur placeholder
+              blurDataURL="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiMwYTJhMmEiLz48L3N2Zz4="
             />
           </motion.div>
           <div className="absolute inset-0 bg-gradient-to-r from-ocean-deep/80 via-ocean-deep/40 to-transparent" />

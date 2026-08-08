@@ -7,19 +7,24 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   
-  // HOTFIX: Compiler optimization untuk modern browsers (reduce polyfills)
+  // MOBILE HOTFIX: Aggressive compiler optimization
   compiler: {
     removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["error", "warn"] } : false,
+    // MOBILE: Remove React DevTools in production
+    reactRemoveProperties: process.env.NODE_ENV === "production" ? { properties: ["^data-test"] } : false,
   },
   
-  // HOTFIX: SWC configuration untuk target modern browsers
+  // MOBILE HOTFIX: SWC configuration
   swcMinify: true,
   
-  // HOTFIX: Experimental features untuk better performance
+  // MOBILE HOTFIX: Experimental features
   experimental: {
     optimizePackageImports: ['lucide-react', 'framer-motion'],
+    // MOBILE: Optimize CSS loading
+    optimizeCss: true,
   },
   
+  // MOBILE HOTFIX: Aggressive image optimization
   images: {
     remotePatterns: [
       {
@@ -32,11 +37,12 @@ const nextConfig = {
       },
     ],
     formats: ["image/avif", "image/webp"],
-    deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
-    imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
+    // MOBILE: Smaller device sizes for mobile-first
+    deviceSizes: [375, 414, 640, 750, 828, 1080, 1200],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256],
     minimumCacheTTL: 60,
-    // HOTFIX: Optimize quality default untuk faster loading
-    quality: 80,
+    // MOBILE: Aggressive default quality for mobile
+    quality: 75,
     dangerouslyAllowSVG: true,
     contentDispositionType: "attachment",
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
