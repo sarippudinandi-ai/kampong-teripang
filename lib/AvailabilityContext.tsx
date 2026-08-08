@@ -89,31 +89,17 @@ export function AvailabilityProvider({ children }: { children: ReactNode }) {
   const [updating, setUpdating] = useState(false);
 
   const refresh = useCallback(async () => {
-    const abortController = new AbortController();
-    
     setLoading(true);
     try {
       const result = await fetchAvailability();
-      
-      // Check if component is still mounted
-      if (!abortController.signal.aborted) {
-        setData(result.data);
-        setSource(result.source);
-      }
+      setData(result.data);
+      setSource(result.source);
     } catch (error) {
-      if (!abortController.signal.aborted) {
-        console.error('[Availability] Refresh error:', error);
-        setSource('error');
-      }
+      console.error('[Availability] Refresh error:', error);
+      setSource('error');
     } finally {
-      if (!abortController.signal.aborted) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
-    
-    return () => {
-      abortController.abort();
-    };
   }, []);
 
   useEffect(() => {

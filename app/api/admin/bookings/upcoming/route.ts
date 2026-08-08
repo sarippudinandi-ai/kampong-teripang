@@ -76,23 +76,27 @@ export async function GET(req: NextRequest) {
     }
 
     // Format response
-    const formattedBookings = (bookings || []).map((booking) => ({
-      id: booking.id,
-      nama_pemesan: booking.nama_pemesan,
-      email: booking.email,
-      no_wa: booking.no_wa,
-      booking_status: booking.booking_status,
-      status_pembayaran: booking.status_pembayaran,
-      check_in: booking.check_in,
-      check_out: booking.check_out,
-      guest_count: booking.guest_count,
-      total_bayar: booking.total_bayar,
-      created_at: booking.created_at,
-      admin_notes: booking.admin_notes,
-      room_number: booking.rooms?.room_number || null,
-      room_name: booking.rooms?.room_name || null,
-      room_type: booking.rooms?.room_type || null,
-    }));
+    const formattedBookings = (bookings || []).map((booking) => {
+      const room = (booking.rooms as any) || null;
+      const r = Array.isArray(room) ? room[0] : room;
+      return {
+        id: booking.id,
+        nama_pemesan: booking.nama_pemesan,
+        email: booking.email,
+        no_wa: booking.no_wa,
+        booking_status: booking.booking_status,
+        status_pembayaran: booking.status_pembayaran,
+        check_in: booking.check_in,
+        check_out: booking.check_out,
+        guest_count: booking.guest_count,
+        total_bayar: booking.total_bayar,
+        created_at: booking.created_at,
+        admin_notes: booking.admin_notes,
+        room_number: r?.room_number || null,
+        room_name: r?.room_name || null,
+        room_type: r?.room_type || null,
+      };
+    });
 
     // Calculate statistics
     const today = new Date().toISOString().split("T")[0];

@@ -13,6 +13,7 @@ import {
   CheckCircle,
 } from "lucide-react";
 import { PRODUCTS } from "@/lib/data";
+import { useCmsContent, mergeById } from "@/lib/cmsContent";
 
 interface CartItem {
   id: string;
@@ -24,6 +25,8 @@ interface CartItem {
 
 export default function StorePage() {
   const [cart, setCart] = useState<CartItem[]>([]);
+  const cms = useCmsContent();
+  const products = mergeById(PRODUCTS, cms.products);
   const [cartOpen, setCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
   const [checkoutForm, setCheckoutForm] = useState({
@@ -103,7 +106,7 @@ export default function StorePage() {
     }
   };
 
-  const detailProduct = PRODUCTS.find((p) => p.id === selectedProduct);
+  const detailProduct = products.find((p) => p.id === selectedProduct);
 
   return (
     <>
@@ -174,7 +177,7 @@ export default function StorePage() {
         </motion.div>
 
         <div className="grid md:grid-cols-3 gap-8">
-          {PRODUCTS.map((product, i) => (
+          {products.map((product, i) => (
             <motion.div
               key={product.id}
               initial={{ opacity: 0, y: 30 }}

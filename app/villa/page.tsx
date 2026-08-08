@@ -12,7 +12,8 @@ import {
   Star,
 } from "lucide-react";
 import { VILLA_PACKAGES } from "@/lib/data";
-import BookingWidget from "@/components/BookingWidget";
+import { useCmsContent, mergeById } from "@/lib/cmsContent";
+import BookingFormWithCalendar from "@/components/BookingFormWithCalendar";
 
 const facilities = [
   { icon: Wifi, label: "WiFi Gratis" },
@@ -32,6 +33,8 @@ const galleryImages = [
 
 export default function VillaPage() {
   const [selectedImage, setSelectedImage] = useState(0);
+  const cms = useCmsContent();
+  const villaPackages = mergeById(VILLA_PACKAGES, cms.villa);
 
   return (
     <>
@@ -142,7 +145,7 @@ export default function VillaPage() {
         </motion.div>
 
         <div className="grid md:grid-cols-3 gap-6">
-          {VILLA_PACKAGES.map((pkg, i) => (
+          {villaPackages.map((pkg, i) => (
             <motion.div
               key={pkg.id}
               initial={{ opacity: 0, y: 30 }}
@@ -207,9 +210,9 @@ export default function VillaPage() {
         </div>
       </section>
 
-      {/* Booking Widget */}
+      {/* Booking Widget - NEW INTEGRATED SYSTEM */}
       <section id="booking" className="py-16 bg-ocean-mid/30">
-        <div className="max-w-4xl mx-auto px-8 sm:px-14 lg:px-24">
+        <div className="max-w-5xl mx-auto px-8 sm:px-14 lg:px-24">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -220,11 +223,10 @@ export default function VillaPage() {
               Buat Reservasi
             </h2>
             <p className="text-white/50">
-              Isi form di bawah dan kami akan konfirmasi ketersediaan dalam 1x24
-              jam
+              Pilih tanggal dan kamar tersedia, lanjutkan ke pembayaran dengan WhatsApp
             </p>
           </motion.div>
-          <BookingWidget packages={VILLA_PACKAGES} />
+          <BookingFormWithCalendar />
         </div>
       </section>
 

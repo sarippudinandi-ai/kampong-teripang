@@ -12,9 +12,12 @@ import {
   CheckCircle,
 } from "lucide-react";
 import { EDU_PACKAGES } from "@/lib/data";
+import { useCmsContent, mergeById } from "@/lib/cmsContent";
 
 export default function EduTourPage() {
   const [bookingPkg, setBookingPkg] = useState<string | null>(null);
+  const cms = useCmsContent();
+  const eduPackages = mergeById(EDU_PACKAGES, cms.edu);
   const [form, setForm] = useState({
     nama: "",
     email: "",
@@ -25,7 +28,7 @@ export default function EduTourPage() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  const selectedPkg = EDU_PACKAGES.find((p) => p.id === bookingPkg);
+  const selectedPkg = eduPackages.find((p) => p.id === bookingPkg);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,7 +118,7 @@ export default function EduTourPage() {
         </motion.div>
 
         <div className="space-y-8">
-          {EDU_PACKAGES.map((pkg, i) => (
+          {eduPackages.map((pkg, i) => (
             <motion.div
               key={pkg.id}
               initial={{ opacity: 0, y: 30 }}

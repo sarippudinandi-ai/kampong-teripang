@@ -236,12 +236,15 @@ export default function HomePage() {
           >
             <div className="img-zoom rounded-3xl overflow-hidden h-[500px]">
               <Image
-                src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&q=80"
+                src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&q=75"
                 alt="Tradisi Bekarang Bintan"
                 fill
                 className="object-cover"
                 sizes="(max-width: 1024px) 100vw, 50vw"
                 loading="lazy"
+                quality={75} // HOTFIX: Reduce from 80 to 75 (save ~9KB)
+                placeholder="blur"
+                blurDataURL="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiMwYTJhMmEiLz48L3N2Zz4="
               />
             </div>
             <div className="absolute bottom-8 left-8 right-8 glass rounded-2xl p-6">

@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { rateLimit, getClientIP } from "@/lib/rateLimit";
+import { createClient } from "@supabase/supabase-js";
+
+// Initialize Supabase client with service role for admin operations
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 // Rate limiter: max 5 login attempts per minute per IP
 const limiter = rateLimit({
@@ -43,19 +50,47 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Get hashed password from environment
-    const passwordHash = process.env.ADMIN_PASSWORD_HASH;
+    // METHOD 1: Try database authentication first (using pgcrypto)
+    let isValid = false;
+    let authMethod = "unknown";
 
-    if (!passwordHash) {
-      console.error("ADMIN_PASSWORD_HASH not configured in environment");
-      return NextResponse.json(
-        { error: "Server configuration error", valid: false },
-        { status: 500 }
-      );
+    try {
+      // Query admin_users table (password hashed with pgcrypto/bcrypt)
+      const { data: adminUser, error: dbError } = await supabaseAdmin
+        .rpc('verify_admin_password', {
+          input_username: 'admin',
+          input_password: password
+        });
+
+      if (!dbError && adminUser === true) {
+        isValid = true;
+        authMethod = "database";
+      }
+    } catch (dbError) {
+      console.warn("Database auth failed, falling back to ENV:", dbError);
     }
 
-    // Compare password with hash
-    const isValid = await bcrypt.compare(password, passwordHash);
+    // METHOD 2: Fallback to ENV hash if database auth fails
+    if (!isValid) {
+      const passwordHash = process.env.ADMIN_PASSWORD_HASH;
+
+      if (passwordHash) {
+        isValid = await bcrypt.compare(password, passwordHash);
+        if (isValid) {
+          authMethod = "environment";
+        }
+      }
+    }
+
+    // METHOD 3: Emergency fallback - plaintext comparison (ONLY for development)
+    if (!isValid && process.env.NODE_ENV !== "production") {
+      const plainPassword = process.env.ADMIN_PASSWORD || "melamun2024";
+      if (password === plainPassword) {
+        isValid = true;
+        authMethod = "plaintext_dev";
+        console.warn("⚠️ WARNING: Using plaintext password comparison. NOT secure for production!");
+      }
+    }
 
     if (!isValid) {
       return NextResponse.json(
@@ -63,6 +98,8 @@ export async function POST(req: NextRequest) {
         { status: 401 }
       );
     }
+
+    console.log(`✅ Admin authenticated via: ${authMethod}`);
 
     // Generate secure session token
     const sessionToken = generateSessionToken();
@@ -84,6 +121,32 @@ export async function POST(req: NextRequest) {
     console.error("Admin verification error:", error);
     return NextResponse.json(
       { error: "Internal server error", valid: false },
+      { status: 500 }
+    );
+  }
+}
+
+// Session check endpoint (used by /admin/bookings page to verify auth)
+export async function GET() {
+  try {
+    const cookieStore = cookies();
+    const adminSession = cookieStore.get("admin_session");
+
+    if (!adminSession) {
+      return NextResponse.json(
+        { authenticated: false, error: "No active session" },
+        { status: 401 }
+      );
+    }
+
+    return NextResponse.json({
+      authenticated: true,
+      message: "Session active",
+    });
+  } catch (error) {
+    console.error("Session check error:", error);
+    return NextResponse.json(
+      { authenticated: false, error: "Session check failed" },
       { status: 500 }
     );
   }

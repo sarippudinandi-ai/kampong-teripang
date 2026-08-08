@@ -118,40 +118,50 @@ EXECUTE FUNCTION update_booking_timestamp();
 
 CREATE OR REPLACE FUNCTION sync_booking_to_room_bookings()
 RETURNS TRIGGER AS $$
+DECLARE
+  v_date DATE;
 BEGIN
-  -- When booking is CONFIRMED and PAID -> mark room occupied
-  -- NOTE: we intentionally do NOT write to room_bookings here.
-  -- room_bookings.transaction_id has an FK to transactions(id), and this
-  -- flow uses the `bookings` table (different id space) -> would violate FK.
-  -- Availability is derived from `bookings` via check_booking_conflict().
+  -- When booking is CONFIRMED and PAID
   IF NEW.booking_status = 'CONFIRMED' AND NEW.payment_status = 'PAID' THEN
+    -- Mark room as occupied
     UPDATE rooms
     SET status = 'occupied', updated_at = NOW()
     WHERE id = NEW.room_id;
-
-    IF NEW.confirmed_at IS NULL THEN
-      NEW.confirmed_at := NOW();
-    END IF;
+    
+    -- Create room_bookings entries for each night
+    v_date := NEW.check_in;
+    WHILE v_date < NEW.check_out LOOP
+      INSERT INTO room_bookings (room_id, transaction_id, booking_date, status)
+      VALUES (NEW.room_id, NEW.id, v_date, 'booked')
+      ON CONFLICT (room_id, booking_date) DO NOTHING;
+      
+      v_date := v_date + INTERVAL '1 day';
+    END LOOP;
+    
+    -- Set confirmed timestamp
+    NEW.confirmed_at := NOW();
   END IF;
-
-  -- When booking is CANCELLED -> free the room if no other active booking overlaps
+  
+  -- When booking is CANCELLED
   IF NEW.booking_status = 'CANCELLED' THEN
+    -- Delete room_bookings entries
+    DELETE FROM room_bookings
+    WHERE transaction_id = NEW.id;
+    
+    -- Check if room should be set back to available
     UPDATE rooms
     SET status = 'available', updated_at = NOW()
     WHERE id = NEW.room_id
       AND NOT EXISTS (
-        SELECT 1 FROM bookings b
-        WHERE b.room_id = NEW.room_id
-          AND b.id <> NEW.id
-          AND b.booking_status IN ('CONFIRMED', 'CHECKED_IN')
-          AND b.check_out >= CURRENT_DATE
+        SELECT 1 FROM room_bookings
+        WHERE room_id = NEW.room_id
+          AND booking_date >= CURRENT_DATE
       );
-
-    IF NEW.cancelled_at IS NULL THEN
-      NEW.cancelled_at := NOW();
-    END IF;
+    
+    -- Set cancelled timestamp
+    NEW.cancelled_at := NOW();
   END IF;
-
+  
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -199,9 +209,9 @@ $$ LANGUAGE plpgsql;
 -- ============================================
 
 CREATE OR REPLACE FUNCTION get_available_rooms_v2(
-  check_in DATE,
-  check_out DATE,
-  filter_type TEXT DEFAULT NULL
+  p_check_in DATE,
+  p_check_out DATE,
+  p_room_type TEXT DEFAULT NULL
 )
 RETURNS TABLE (
   room_id UUID,
@@ -225,13 +235,13 @@ BEGIN
     r.base_price,
     r.amenities,
     r.photo_url,
-    check_booking_conflict(r.id, check_in, check_out) as is_available
+    check_booking_conflict(r.id, p_check_in, p_check_out) as is_available
   FROM rooms r
   WHERE r.status IN ('available', 'occupied')  -- Include occupied for real-time check
-    AND (filter_type IS NULL OR r.room_type = filter_type)
+    AND (p_room_type IS NULL OR r.room_type = p_room_type)
   ORDER BY r.floor_level, r.position_order;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql;
 
 -- ============================================
 -- 8. CREATE VIEW: Booking Dashboard
@@ -338,7 +348,7 @@ BEGIN
   RAISE NOTICE '   -- Test booking ID generation:';
   RAISE NOTICE '   SELECT generate_booking_id();';
   RAISE NOTICE '';
-  RAISE NOTICE '   -- Test availability (parameters: check_in, check_out, room_type):';
+  RAISE NOTICE '   -- Test availability (explicit casting required):';
   RAISE NOTICE '   SELECT * FROM get_available_rooms_v2(';
   RAISE NOTICE '     CURRENT_DATE::date,';
   RAISE NOTICE '     (CURRENT_DATE + INTERVAL ''7 days'')::date,';

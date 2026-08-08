@@ -259,7 +259,7 @@ export default function AvailabilityCalendar({ isAdmin = false }: Props) {
                     : availPaket === 1 ? "bg-orange-500/20 text-orange-400"
                     : "bg-green-500/15 text-green-400"
                   }`}>
-                    {availPaket === 0 ? "Penuh" : `${availPaket}/3 kamar`}
+                    {availPaket === 0 ? "Penuh" : `${availPaket}/${group.rooms.length} kamar`}
                   </span>
                 </div>
                 {group.rooms.map((roomId) => {

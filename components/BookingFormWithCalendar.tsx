@@ -44,6 +44,36 @@ export default function BookingFormWithCalendar() {
   const [totalPrice, setTotalPrice] = useState(0);
   const [nights, setNights] = useState(0);
 
+  // Soft-lock: session id unik per tab browser (Module 03)
+  const [sessionId] = useState(() => {
+    if (typeof window === "undefined") return "ssr-session";
+    const existing = sessionStorage.getItem("booking_session_id");
+    if (existing) return existing;
+    const id =
+      (typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    sessionStorage.setItem("booking_session_id", id);
+    return id;
+  });
+  const [lockedRoomId, setLockedRoomId] = useState<string>("");
+
+  // Lepas soft-lock saat komponen unmount / pengguna meninggalkan halaman
+  useEffect(() => {
+    return () => {
+      try {
+        fetch("/api/rooms/lock", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ locked_by: sessionId }),
+          keepalive: true,
+        }).catch(() => {});
+      } catch {
+        // abaikan
+      }
+    };
+  }, [sessionId]);
+
   // Room type options
   const roomTypes = [
     { value: "standard", label: "Sea Healing Room (Standard)", price: 850000 },
@@ -95,11 +125,35 @@ export default function BookingFormWithCalendar() {
     setError("");
 
     try {
-      const { data, error } = await supabase.rpc("get_available_rooms_v2", {
-        p_check_in: checkIn,
-        p_check_out: checkOut,
-        p_room_type: roomType,
+      // FAIL-SAFE: bersihkan booking pending kadaluarsa sebelum cek ketersediaan.
+      // Fire-and-forget (tidak memblok UI). Membuat kamar yang locknya sudah
+      // lewat 30 menit kembali hijau secara otomatis tanpa pg_cron.
+      try {
+        await fetch("/api/cron/expire-bookings", {
+          method: "POST",
+          headers: { "x-internal-sweep": "1" },
+        });
+      } catch {
+        // abaikan kegagalan sweep — cek ketersediaan tetap lanjut
+      }
+
+      // DEBUG: Log parameters being sent
+      console.log("🔍 Fetching rooms with params:", {
+        check_in: checkIn,
+        check_out: checkOut,
+        filter_type: roomType || null,
       });
+
+      // Call PostgreSQL RPC function
+      // Note: input param renamed to 'filter_type' to avoid conflict with
+      // the 'room_type' output column in RETURNS TABLE (Postgres 42P13).
+      const { data, error } = await supabase.rpc("get_available_rooms_v2", {
+        check_in: checkIn,
+        check_out: checkOut,
+        filter_type: roomType || null,
+      });
+
+      console.log("📦 RPC Response:", { data, error });
 
       if (error) {
         console.error("Error fetching rooms:", error);
@@ -125,6 +179,47 @@ export default function BookingFormWithCalendar() {
       setAvailableRooms([]);
     } finally {
       setLoadingRooms(false);
+    }
+  };
+
+  // Pilih kamar + soft-lock real-time (Module 03).
+  // Klik kamar kosong -> backend menahan kamar 10 menit di semua perangkat.
+  const selectRoomAndLock = async (roomId: string) => {
+    setSelectedRoomId(roomId);
+
+    if (!checkIn || !checkOut) return;
+
+    try {
+      const res = await fetch("/api/rooms/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: roomId,
+          check_in: checkIn,
+          check_out: checkOut,
+          locked_by: sessionId,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.locked) {
+        // Ditolak: kamar baru saja ditahan/dipesan orang lain
+        setError(
+          data.message ||
+            "Kamar baru saja ditahan orang lain. Memuat ulang ketersediaan..."
+        );
+        setSelectedRoomId("");
+        setLockedRoomId("");
+        fetchAvailableRooms();
+        return;
+      }
+
+      setLockedRoomId(roomId);
+      setError("");
+    } catch {
+      // Degradasi anggun: jika lock gagal, tetap izinkan lanjut
+      setLockedRoomId("");
     }
   };
 
@@ -179,7 +274,18 @@ export default function BookingFormWithCalendar() {
         return;
       }
 
-      // Success - redirect to checkout page
+      // Success - booking PENDING sudah menahan kamar, lepas soft-lock
+      try {
+        await fetch("/api/rooms/lock", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ locked_by: sessionId }),
+        });
+      } catch {
+        // abaikan, lock akan kadaluarsa sendiri
+      }
+
+      // Redirect to checkout page
       router.push(`/checkout/${data.booking.booking_id}`);
     } catch (err) {
       console.error("Booking error:", err);
@@ -189,14 +295,14 @@ export default function BookingFormWithCalendar() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-lg">
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">
+    <div className="glass rounded-3xl p-6 sm:p-8 space-y-6">
+      <h2 className="text-2xl font-serif text-white mb-6">
         Booking Kamar Villa
       </h2>
 
       {error && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-red-700 text-sm">{error}</p>
+        <div className="mb-4 p-4 bg-red-500/20 border border-red-500/50 rounded-lg">
+          <p className="text-red-200 text-sm">{error}</p>
         </div>
       )}
 
@@ -204,52 +310,52 @@ export default function BookingFormWithCalendar() {
         {/* Guest Information */}
         <div className="grid md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-white/70 mb-2">
               Nama Lengkap *
             </label>
             <input
               type="text"
               value={guestName}
               onChange={(e) => setGuestName(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-white/30 focus:outline-none focus:border-sand transition-colors"
               placeholder="John Doe"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-white/70 mb-2">
               Email *
             </label>
             <input
               type="email"
               value={guestEmail}
               onChange={(e) => setGuestEmail(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-white/30 focus:outline-none focus:border-sand transition-colors"
               placeholder="john@example.com"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-white/70 mb-2">
               No. WhatsApp *
             </label>
             <input
               type="tel"
               value={guestWa}
               onChange={(e) => setGuestWa(e.target.value.replace(/\D/g, ""))}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-white/30 focus:outline-none focus:border-sand transition-colors"
               placeholder="628123456789"
               required
             />
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-white/40 mt-1">
               Contoh: 628123456789 (gunakan kode negara)
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-white/70 mb-2">
               Jumlah Tamu *
             </label>
             <input
@@ -258,7 +364,7 @@ export default function BookingFormWithCalendar() {
               onChange={(e) => setGuestCount(parseInt(e.target.value))}
               min="1"
               max="20"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-sand transition-colors"
               required
             />
           </div>
@@ -266,7 +372,7 @@ export default function BookingFormWithCalendar() {
 
         {/* Room Type Selection */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-white/70 mb-2">
             Tipe Kamar *
           </label>
           <select
@@ -275,10 +381,10 @@ export default function BookingFormWithCalendar() {
               setRoomType(e.target.value);
               setSelectedRoomId(""); // Reset room selection
             }}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-sand transition-colors"
           >
             {roomTypes.map((type) => (
-              <option key={type.value} value={type.value}>
+              <option key={type.value} value={type.value} className="bg-ocean-deep">
                 {type.label} - Rp {type.price.toLocaleString("id-ID")}/malam
               </option>
             ))}
@@ -288,7 +394,7 @@ export default function BookingFormWithCalendar() {
         {/* Date Selection */}
         <div className="grid md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-white/70 mb-2">
               Check-in *
             </label>
             <input
@@ -296,13 +402,13 @@ export default function BookingFormWithCalendar() {
               value={checkIn}
               onChange={(e) => setCheckIn(e.target.value)}
               min={today}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-sand transition-colors"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-white/70 mb-2">
               Check-out *
             </label>
             <input
@@ -310,7 +416,7 @@ export default function BookingFormWithCalendar() {
               value={checkOut}
               onChange={(e) => setCheckOut(e.target.value)}
               min={checkIn || today}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-sand transition-colors"
               required
             />
           </div>
@@ -319,43 +425,43 @@ export default function BookingFormWithCalendar() {
         {/* Available Rooms Display */}
         {loadingRooms && (
           <div className="text-center py-4">
-            <p className="text-gray-600">Mengecek ketersediaan kamar...</p>
+            <p className="text-white/60">Mengecek ketersediaan kamar...</p>
           </div>
         )}
 
         {!loadingRooms && availableRooms.length > 0 && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">
+            <label className="block text-sm font-medium text-white/70 mb-3">
               Pilih Kamar ({availableRooms.length} tersedia)
             </label>
             <div className="grid md:grid-cols-2 gap-4">
               {availableRooms.map((room) => (
                 <div
                   key={room.room_id}
-                  onClick={() => setSelectedRoomId(room.room_id)}
-                  className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                  onClick={() => selectRoomAndLock(room.room_id)}
+                  className={`p-4 border-2 rounded-xl cursor-pointer transition-all ${
                     selectedRoomId === room.room_id
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-gray-200 hover:border-blue-300"
+                      ? "border-sand bg-sand/10"
+                      : "border-white/10 bg-white/5 hover:border-sand/50"
                   }`}
                 >
                   <div className="flex items-start justify-between">
                     <div>
-                      <h4 className="font-semibold text-gray-900">
+                      <h4 className="font-semibold text-white">
                         {room.room_number}
                       </h4>
-                      <p className="text-sm text-gray-600">{room.room_name}</p>
-                      <p className="text-sm text-gray-500 mt-1">
+                      <p className="text-sm text-white/60">{room.room_name}</p>
+                      <p className="text-sm text-white/40 mt-1">
                         Kapasitas: {room.capacity} orang
                       </p>
-                      <p className="text-sm font-medium text-blue-600 mt-2">
+                      <p className="text-sm font-medium text-sand mt-2">
                         Rp {room.base_price.toLocaleString("id-ID")}/malam
                       </p>
                     </div>
                     {selectedRoomId === room.room_id && (
                       <div className="flex-shrink-0">
                         <svg
-                          className="w-6 h-6 text-blue-500"
+                          className="w-6 h-6 text-sand"
                           fill="currentColor"
                           viewBox="0 0 20 20"
                         >
@@ -376,7 +482,7 @@ export default function BookingFormWithCalendar() {
 
         {/* Notes */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-white/70 mb-2">
             Catatan (Opsional)
           </label>
           <textarea
@@ -384,28 +490,28 @@ export default function BookingFormWithCalendar() {
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
             maxLength={500}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-white/30 focus:outline-none focus:border-sand transition-colors resize-none"
             placeholder="Permintaan khusus atau informasi tambahan"
           />
         </div>
 
         {/* Price Summary */}
         {nights > 0 && totalPrice > 0 && (
-          <div className="bg-gray-50 p-4 rounded-lg">
-            <h3 className="font-semibold text-gray-900 mb-2">
+          <div className="bg-ocean-teal/20 border border-ocean-teal/30 p-4 rounded-xl">
+            <h3 className="font-semibold text-white mb-2">
               Ringkasan Harga
             </h3>
             <div className="space-y-1 text-sm">
               <div className="flex justify-between">
-                <span className="text-gray-600">{nights} malam</span>
-                <span className="text-gray-900">
+                <span className="text-white/60">{nights} malam</span>
+                <span className="text-white">
                   Rp {totalPrice.toLocaleString("id-ID")}
                 </span>
               </div>
-              <div className="border-t border-gray-300 pt-2 mt-2">
+              <div className="border-t border-white/10 pt-2 mt-2">
                 <div className="flex justify-between font-semibold text-base">
-                  <span>Total</span>
-                  <span className="text-blue-600">
+                  <span className="text-white">Total</span>
+                  <span className="text-sand font-serif text-lg">
                     Rp {totalPrice.toLocaleString("id-ID")}
                   </span>
                 </div>
@@ -418,7 +524,7 @@ export default function BookingFormWithCalendar() {
         <button
           type="submit"
           disabled={loading || !selectedRoomId || loadingRooms}
-          className="w-full py-3 px-6 text-white font-medium rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed bg-blue-600 hover:bg-blue-700"
+          className="btn-gold w-full py-4 rounded-xl font-semibold transition-all hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
           {loading
             ? "Memproses..."
@@ -426,6 +532,10 @@ export default function BookingFormWithCalendar() {
             ? "Mengecek ketersediaan..."
             : "Lanjutkan ke Pembayaran"}
         </button>
+
+        <p className="text-white/30 text-xs text-center">
+          Setelah submit, Anda akan diarahkan ke halaman checkout untuk konfirmasi pembayaran via WhatsApp
+        </p>
       </form>
     </div>
   );

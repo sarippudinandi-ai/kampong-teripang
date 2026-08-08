@@ -1,33 +1,34 @@
 // ─── Availability System ─────────────────────────────────────────────────────
-// 3 paket villa × 3 kamar per paket = 9 kamar total
+// Mirror of the `rooms` table (cinema_inventory seed): A1-A4, B1-B3, C1-C2 = 9 rooms
+// Kept in sync with Cinema Grid so both show the SAME rooms/names/structure.
 
 export const VILLA_ROOMS = [
-  { id: "sea-healing-1", nama: "Sea Healing Room 1", paket: "Sea Healing Room", kapasitas: 2 },
-  { id: "sea-healing-2", nama: "Sea Healing Room 2", paket: "Sea Healing Room", kapasitas: 2 },
-  { id: "sea-healing-3", nama: "Sea Healing Room 3", paket: "Sea Healing Room", kapasitas: 2 },
-  { id: "deluxe-suite-1", nama: "Kelong Deluxe Suite 1", paket: "Kelong Deluxe Suite", kapasitas: 2 },
-  { id: "deluxe-suite-2", nama: "Kelong Deluxe Suite 2", paket: "Kelong Deluxe Suite", kapasitas: 2 },
-  { id: "deluxe-suite-3", nama: "Kelong Deluxe Suite 3", paket: "Kelong Deluxe Suite", kapasitas: 2 },
-  { id: "family-house-1", nama: "Family Kelong House 1", paket: "Family Kelong House", kapasitas: 6 },
-  { id: "family-house-2", nama: "Family Kelong House 2", paket: "Family Kelong House", kapasitas: 6 },
-  { id: "family-house-3", nama: "Family Kelong House 3", paket: "Family Kelong House", kapasitas: 6 },
+  { id: "A1", nama: "Sea Healing A1", paket: "Sea Healing Room (Standard)", kapasitas: 2 },
+  { id: "A2", nama: "Sea Healing A2", paket: "Sea Healing Room (Standard)", kapasitas: 2 },
+  { id: "A3", nama: "Sea Healing A3", paket: "Sea Healing Room (Standard)", kapasitas: 2 },
+  { id: "A4", nama: "Sea Healing A4", paket: "Sea Healing Room (Standard)", kapasitas: 2 },
+  { id: "B1", nama: "Deluxe Suite B1", paket: "Kelong Deluxe Suite", kapasitas: 2 },
+  { id: "B2", nama: "Deluxe Suite B2", paket: "Kelong Deluxe Suite", kapasitas: 2 },
+  { id: "B3", nama: "Deluxe Suite B3", paket: "Kelong Deluxe Suite", kapasitas: 2 },
+  { id: "C1", nama: "Family House C1", paket: "Family Kelong House", kapasitas: 6 },
+  { id: "C2", nama: "Family House C2", paket: "Family Kelong House", kapasitas: 6 },
 ] as const;
 
 export type RoomId = (typeof VILLA_ROOMS)[number]["id"];
 
-// Grup paket untuk tampilan
+// Grup paket untuk tampilan (mirror room_type grouping of the rooms table)
 export const PAKET_GROUPS = [
   {
-    paket: "Sea Healing Room",
-    rooms: ["sea-healing-1", "sea-healing-2", "sea-healing-3"] as RoomId[],
+    paket: "Sea Healing Room (Standard)",
+    rooms: ["A1", "A2", "A3", "A4"] as RoomId[],
   },
   {
     paket: "Kelong Deluxe Suite",
-    rooms: ["deluxe-suite-1", "deluxe-suite-2", "deluxe-suite-3"] as RoomId[],
+    rooms: ["B1", "B2", "B3"] as RoomId[],
   },
   {
     paket: "Family Kelong House",
-    rooms: ["family-house-1", "family-house-2", "family-house-3"] as RoomId[],
+    rooms: ["C1", "C2"] as RoomId[],
   },
 ];
 
@@ -57,13 +58,14 @@ export function countAvailableByPaket(
   paket: string
 ): number {
   const group = PAKET_GROUPS.find((g) => g.paket === paket);
-  if (!group) return 3;
-  if (!day) return 3;
+  if (!group) return 0;
+  const total = group.rooms.length;
+  if (!day) return total;
   const booked = group.rooms.filter((roomId) => {
     const r = day.rooms.find((rb) => rb.roomId === roomId);
     return r && (r.status === "terpesan" || r.status === "maintenance");
   }).length;
-  return 3 - booked;
+  return total - booked;
 }
 
 export type DayColor = "full" | "almost" | "half" | "available" | "empty";
@@ -82,58 +84,5 @@ export function formatDateKey(year: number, month: number, day: number): string 
 }
 
 // ─── Default data dummy ───────────────────────────────────────────────────────
-export const defaultAvailability: DayAvailability[] = [
-  {
-    tanggal: "2025-06-07",
-    rooms: [
-      { roomId: "sea-healing-1", status: "terpesan", namaTamu: "Budi S." },
-      { roomId: "sea-healing-2", status: "terpesan", namaTamu: "Rina K." },
-      { roomId: "sea-healing-3", status: "terpesan", namaTamu: "Doni P." },
-      { roomId: "deluxe-suite-1", status: "terpesan", namaTamu: "Keluarga Tan" },
-      { roomId: "deluxe-suite-2", status: "terpesan", namaTamu: "Ahmad F." },
-      { roomId: "deluxe-suite-3", status: "terpesan", namaTamu: "Sarah T." },
-      { roomId: "family-house-1", status: "terpesan", namaTamu: "Keluarga Besar" },
-      { roomId: "family-house-2", status: "terpesan", namaTamu: "Wati R." },
-      { roomId: "family-house-3", status: "terpesan", namaTamu: "Hendra L." },
-    ],
-  },
-  {
-    tanggal: "2025-06-14",
-    rooms: [
-      { roomId: "sea-healing-1", status: "terpesan", namaTamu: "Maya S." },
-      { roomId: "sea-healing-2", status: "terpesan", namaTamu: "Rizky A." },
-      { roomId: "deluxe-suite-1", status: "terpesan", namaTamu: "Lina W." },
-      { roomId: "family-house-1", status: "terpesan", namaTamu: "Putri N." },
-    ],
-  },
-  {
-    tanggal: "2025-06-21",
-    rooms: VILLA_ROOMS.map((r) => ({
-      roomId: r.id,
-      status: "maintenance" as const,
-      catatan: "Perawatan fasilitas",
-    })),
-  },
-  {
-    tanggal: "2025-07-04",
-    rooms: [
-      { roomId: "sea-healing-1", status: "terpesan", namaTamu: "Eko B." },
-      { roomId: "sea-healing-2", status: "terpesan", namaTamu: "Sari M." },
-      { roomId: "sea-healing-3", status: "terpesan", namaTamu: "Joko W." },
-      { roomId: "deluxe-suite-1", status: "terpesan", namaTamu: "Keluarga Joko" },
-      { roomId: "deluxe-suite-2", status: "terpesan", namaTamu: "Nita R." },
-      { roomId: "deluxe-suite-3", status: "terpesan", namaTamu: "Bayu P." },
-      { roomId: "family-house-1", status: "terpesan", namaTamu: "Keluarga Besar 2" },
-      { roomId: "family-house-2", status: "terpesan", namaTamu: "Tono S." },
-      { roomId: "family-house-3", status: "terpesan", namaTamu: "Dewi A." },
-    ],
-  },
-  {
-    tanggal: "2025-07-12",
-    rooms: [
-      { roomId: "sea-healing-1", status: "terpesan", namaTamu: "Rudi H." },
-      { roomId: "deluxe-suite-1", status: "terpesan", namaTamu: "Ani K." },
-      { roomId: "deluxe-suite-2", status: "terpesan", namaTamu: "Beni S." },
-    ],
-  },
-];
+// (Tidak dipakai runtime — context mulai dari array kosong & ambil dari DB)
+export const defaultAvailability: DayAvailability[] = [];

@@ -1,10 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import { Check, Save, Eye, EyeOff } from "lucide-react";
-import AvailabilityCalendar from "@/components/AvailabilityCalendar";
-import { useAvailability } from "@/lib/AvailabilityContext";
-import { VILLA_ROOMS, PAKET_GROUPS, countAvailable, getDayColor } from "@/lib/availability";
+import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+import { Check, Save, Eye, EyeOff, Bell, LayoutGrid, CalendarRange, ClipboardList } from "lucide-react";
+import CinemaRoomGridUpgraded from "@/components/admin/CinemaRoomGridUpgraded";
+import BookingsManager from "@/components/admin/BookingsManager";
+import RoomAvailabilityAdmin from "@/components/admin/RoomAvailabilityAdmin";
+import { invalidateSiteConfig } from "@/lib/useSiteConfig";
+import { invalidateCmsContent, mergeById } from "@/lib/cmsContent";
+
+// Supabase client for admin-wide realtime notifications
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 // ─── Types ───────────────────────────────────────────────
 interface VillaPackage {
@@ -60,15 +69,126 @@ export default function AdminPage() {
   const [villa, setVilla] = useState<VillaPackage[]>(initialVilla);
   const [edu, setEdu] = useState<EduPackage[]>(initialEdu);
   const [products, setProducts] = useState<Product[]>(initialProducts);
-  const [activeTab, setActiveTab] = useState<"villa" | "edu" | "produk" | "info" | "kalender">("kalender");
+  const [activeTab, setActiveTab] = useState<"villa" | "edu" | "produk" | "info" | "dashboard">("dashboard");
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [activeCount, setActiveCount] = useState<number | null>(null);
 
-  // ── Availability dari shared context ──
-  const { data: availability, removeDay, resetAll } = useAvailability();
+  // Admin-wide realtime notification toast (MISI 5)
+  const [adminToast, setAdminToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Info kontak
+  const showAdminToast = (msg: string) => {
+    setAdminToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setAdminToast(null), 4000);
+  };
+
+  // ── Info kontak ──
   const [waNumber, setWaNumber] = useState("6283161259104");
   const [adminName, setAdminName] = useState("MeLamun Villa");
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactSaved, setContactSaved] = useState(false);
+
+  // Load global site config (WhatsApp number) once authenticated (MISI 4)
+  useEffect(() => {
+    if (!authenticated) return;
+    fetch("/api/site-config")
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.config) {
+          setWaNumber(json.config.whatsapp_number || "6283161259104");
+          setAdminName(json.config.business_name || "MeLamun Villa");
+        }
+      })
+      .catch(() => {});
+  }, [authenticated]);
+
+  // Load CMS content overrides (harga/nama/stok) once authenticated
+  useEffect(() => {
+    if (!authenticated) return;
+    fetch("/api/cms-content")
+      .then((r) => r.json())
+      .then((json) => {
+        const c = json?.content;
+        if (!c) return;
+        if (Array.isArray(c.villa) && c.villa.length)
+          setVilla((prev) => mergeById(prev, c.villa));
+        if (Array.isArray(c.edu) && c.edu.length)
+          setEdu((prev) => mergeById(prev, c.edu));
+        if (Array.isArray(c.products) && c.products.length)
+          setProducts((prev) => mergeById(prev, c.products));
+      })
+      .catch(() => {});
+  }, [authenticated]);
+
+  // Admin-wide realtime listener: toast on new/updated bookings (MISI 5)
+  useEffect(() => {
+    if (!authenticated) return;
+
+    // Hitung jumlah booking aktif (live)
+    const fetchActiveCount = async () => {
+      const { count } = await supabase
+        .from("bookings")
+        .select("id", { count: "exact", head: true })
+        .in("booking_status", ["PENDING_PAYMENT", "CONFIRMED", "CHECKED_IN"]);
+      setActiveCount(count ?? 0);
+    };
+
+    fetchActiveCount();
+
+    const channel = supabase
+      .channel("admin-global-bookings")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "bookings" },
+        (payload) => {
+          const name = (payload.new as any)?.guest_name || "Tamu";
+          showAdminToast(`🎉 Booking baru dari ${name}!`);
+          fetchActiveCount();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "bookings" },
+        () => {
+          showAdminToast("🔄 Status booking diperbarui");
+          fetchActiveCount();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [authenticated]);
+
+  // Save global contact config to Supabase (MISI 4)
+  const handleSaveContact = async () => {
+    setSavingContact(true);
+    try {
+      const res = await fetch("/api/site-config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          whatsapp_number: waNumber,
+          business_name: adminName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Gagal menyimpan kontak");
+        return;
+      }
+      invalidateSiteConfig(); // so landing components refetch new number
+      setContactSaved(true);
+      setTimeout(() => setContactSaved(false), 2500);
+    } catch {
+      alert("Gagal menyimpan kontak");
+    } finally {
+      setSavingContact(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,11 +227,27 @@ export default function AdminPage() {
     }
   };
 
-  const handleSave = () => {
-    // Tampilkan notifikasi saved
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
-    // Di sini nanti bisa connect ke Supabase untuk simpan ke database
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/cms-content", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ villa, edu, products }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data?.error || "Gagal menyimpan perubahan");
+        return;
+      }
+      invalidateCmsContent(); // agar landing fetch ulang data terbaru
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch {
+      alert("Gagal menyimpan perubahan. Periksa koneksi.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const formatRp = (val: number) =>
@@ -168,6 +304,15 @@ export default function AdminPage() {
   // ─── Admin Dashboard ──────────────────────────────────
   return (
     <div className="min-h-screen bg-ocean-deep pt-20 pb-16 px-4">
+      {/* Realtime notification toast (MISI 5) */}
+      {adminToast && (
+        <div className="fixed top-24 right-6 z-[60]">
+          <div className="glass border border-sand/40 rounded-xl shadow-2xl px-5 py-4 flex items-center gap-3 animate-pulse">
+            <Bell size={18} className="text-sand" />
+            <p className="font-medium text-white text-sm">{adminToast}</p>
+          </div>
+        </div>
+      )}
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
@@ -175,8 +320,14 @@ export default function AdminPage() {
             <h1 className="font-serif text-3xl text-white">
               Admin <span className="text-sand">CMS</span>
             </h1>
-            <p className="text-white/50 text-sm mt-1">
-              Kelola harga, stok, dan informasi website
+            <p className="text-white/50 text-sm mt-1 flex items-center gap-2 flex-wrap">
+              <span>Kelola harga, stok, dan informasi website</span>
+              {activeCount !== null && (
+                <span className="inline-flex items-center gap-1.5 text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 rounded-full px-2.5 py-0.5 text-xs">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {activeCount} booking aktif
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -187,9 +338,10 @@ export default function AdminPage() {
             )}
             <button
               onClick={handleSave}
-              className="btn-gold px-5 py-2.5 rounded-full text-sm font-semibold flex items-center gap-2"
+              disabled={saving}
+              className="btn-gold px-5 py-2.5 rounded-full text-sm font-semibold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <Save size={16} /> Simpan Perubahan
+              <Save size={16} /> {saving ? "Menyimpan..." : "Simpan Perubahan"}
             </button>
             <button
               onClick={handleLogout}
@@ -202,7 +354,7 @@ export default function AdminPage() {
 
         {/* Tabs */}
         <div className="flex gap-2 mb-8 flex-wrap">
-          {(["kalender", "villa", "edu", "produk", "info"] as const).map((tab) => (
+          {(["dashboard", "villa", "edu", "produk", "info"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -212,129 +364,75 @@ export default function AdminPage() {
                   : "glass text-white/60 hover:text-white"
               }`}
             >
-              {tab === "kalender" ? "📅 Kalender" : tab === "villa" ? "🏠 Villa" : tab === "edu" ? "🌿 Edu Trip" : tab === "produk" ? "🛍️ Produk" : "📞 Info Kontak"}
+              {tab === "dashboard" ? (
+                <span className="inline-flex items-center gap-1.5">
+                  📊 Dashboard
+                  {activeCount !== null && activeCount > 0 && (
+                    <span className={`text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center ${
+                      activeTab === "dashboard" ? "bg-ocean-deep/30 text-ocean-deep" : "bg-sand text-ocean-deep"
+                    }`}>
+                      {activeCount}
+                    </span>
+                  )}
+                </span>
+              ) : tab === "villa" ? "🏠 Villa"
+                : tab === "edu" ? "🌿 Edu Trip"
+                : tab === "produk" ? "🛍️ Produk"
+                : "📞 Info Kontak"}
             </button>
           ))}
         </div>
 
-        {/* ── TAB: KALENDER ── */}
-        {activeTab === "kalender" && (
-          <div>
-            <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
-              <div>
-                <h2 className="text-white font-semibold">Kalender Ketersediaan Kamar</h2>
-                <p className="text-white/50 text-sm mt-1">
-                  Klik tanggal → atur status tiap kamar. Perubahan <span className="text-sand">langsung sync</span> ke halaman utama.
-                </p>
-              </div>
-              <div className="flex gap-3 flex-wrap">
-                <div className="glass rounded-xl px-4 py-2 text-sm text-white/60">
-                  Total kamar: <span className="text-white font-semibold">9</span>
-                  <span className="text-white/30 mx-1">·</span>
-                  3 paket × 3 kamar
+        {/* ── TAB: DASHBOARD (Cinema Grid + Bookings + Kalender) — MISI 1 ── */}
+        {activeTab === "dashboard" && (
+          <div className="space-y-8">
+            {/* Cinema-Style Room Grid */}
+            <div>
+              <div className="flex items-center gap-3 mb-4 pb-3 border-b border-white/10">
+                <div className="w-10 h-10 rounded-xl bg-sand/15 border border-sand/30 flex items-center justify-center text-sand shrink-0">
+                  <LayoutGrid size={20} />
                 </div>
-                <div className="glass rounded-xl px-4 py-2 text-sm text-white/60">
-                  Hari penuh:{" "}
-                  <span className="text-red-400 font-semibold">
-                    {availability.filter((d) => countAvailable(d) === 0).length}
-                  </span>
+                <div>
+                  <h2 className="text-white font-serif text-2xl leading-tight">Status Kamar</h2>
+                  <p className="text-white/50 text-xs mt-0.5">
+                    🟢 Tersedia · 🟡 Menunggu Bayar · 🔴 Terkonfirmasi · 🟠 Maintenance
+                  </p>
                 </div>
               </div>
+              <CinemaRoomGridUpgraded />
             </div>
 
-            <div className="grid lg:grid-cols-2 gap-6">
-              {/* Kalender — pakai context, tidak perlu prop data */}
-              <AvailabilityCalendar isAdmin={true} />
-
-              {/* Daftar booking */}
-              <div className="glass rounded-3xl p-6">
-                <h3 className="text-white font-medium mb-4 flex items-center justify-between">
-                  Daftar Booking
-                  <span className="text-white/40 text-xs font-normal">{availability.length} tanggal</span>
-                </h3>
-
-                {availability.length === 0 ? (
-                  <p className="text-white/40 text-sm text-center py-8">
-                    Belum ada data. Klik tanggal di kalender untuk menambah.
+            {/* Booking Management: Aktif + Riwayat (tab switcher) */}
+            <div>
+              <div className="flex items-center gap-3 mb-4 pb-3 border-b border-white/10">
+                <div className="w-10 h-10 rounded-xl bg-sand/15 border border-sand/30 flex items-center justify-center text-sand shrink-0">
+                  <ClipboardList size={20} />
+                </div>
+                <div>
+                  <h2 className="text-white font-serif text-2xl leading-tight">Manajemen Booking</h2>
+                  <p className="text-white/50 text-xs mt-0.5">
+                    Kelola booking aktif &amp; lihat riwayat pesanan
                   </p>
-                ) : (
-                  <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-                    {[...availability]
-                      .sort((a, b) => a.tanggal.localeCompare(b.tanggal))
-                      .map((day) => {
-                        const avail = countAvailable(day);
-                        const color = getDayColor(day);
-                        return (
-                          <div key={day.tanggal} className="bg-white/5 rounded-xl overflow-hidden">
-                            <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5">
-                              <p className="text-white text-sm font-medium">
-                                {new Date(day.tanggal + "T00:00:00").toLocaleDateString("id-ID", {
-                                  weekday: "short", day: "numeric", month: "short", year: "numeric",
-                                })}
-                              </p>
-                              <div className="flex items-center gap-2">
-                                <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                                  color === "full" ? "bg-red-500 text-white"
-                                  : color === "almost" ? "bg-orange-500/80 text-white"
-                                  : color === "half" ? "bg-yellow-500/40 text-yellow-200"
-                                  : "bg-green-500/20 text-green-400"
-                                }`}>
-                                  {avail === 0 ? "FULL" : `${avail}/9 tersedia`}
-                                </span>
-                                <button
-                                  onClick={() => removeDay(day.tanggal)}
-                                  className="text-white/20 hover:text-red-400 transition-colors text-lg leading-none"
-                                  title="Hapus tanggal ini"
-                                >×</button>
-                              </div>
-                            </div>
-                            {/* Per paket */}
-                            {PAKET_GROUPS.map((group) => {
-                              const bookedInGroup = group.rooms.filter((rid) => {
-                                const r = day.rooms.find((rb) => rb.roomId === rid);
-                                return r && r.status !== "tersedia";
-                              }).length;
-                              if (bookedInGroup === 0) return null;
-                              return (
-                                <div key={group.paket} className="border-t border-white/5">
-                                  <div className="px-4 py-1.5 bg-white/3">
-                                    <p className="text-white/50 text-xs font-medium">{group.paket}</p>
-                                  </div>
-                                  {group.rooms.map((roomId) => {
-                                    const room = VILLA_ROOMS.find((r) => r.id === roomId)!;
-                                    const rd = day.rooms.find((r) => r.roomId === roomId);
-                                    if (!rd || rd.status === "tersedia") return null;
-                                    return (
-                                      <div key={roomId} className="flex items-center justify-between px-6 py-1.5">
-                                        <div>
-                                          <p className="text-white/60 text-xs">{room.nama}</p>
-                                          {rd.namaTamu && <p className="text-white/30 text-xs">{rd.namaTamu}</p>}
-                                          {rd.catatan && <p className="text-white/30 text-xs">{rd.catatan}</p>}
-                                        </div>
-                                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                          rd.status === "terpesan" ? "bg-red-500/15 text-red-400" : "bg-yellow-500/15 text-yellow-400"
-                                        }`}>
-                                          {rd.status === "terpesan" ? "Terpesan" : "Maintenance"}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })}
-                  </div>
-                )}
-
-                <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-center">
-                  <p className="text-white/30 text-xs">Klik × untuk hapus per tanggal</p>
-                  <button onClick={resetAll} className="text-red-400/50 hover:text-red-400 text-xs transition-colors">
-                    Reset semua
-                  </button>
                 </div>
               </div>
+              <BookingsManager />
+            </div>
+
+            {/* Ketersediaan Kamar — okupansi real-time + booking manual */}
+            <div>
+              <div className="flex items-center gap-3 mb-4 pb-3 border-b border-white/10">
+                <div className="w-10 h-10 rounded-xl bg-sand/15 border border-sand/30 flex items-center justify-center text-sand shrink-0">
+                  <CalendarRange size={20} />
+                </div>
+                <div>
+                  <h2 className="text-white font-serif text-2xl leading-tight">Ketersediaan Kamar</h2>
+                  <p className="text-white/50 text-xs mt-0.5">
+                    Okupansi <span className="text-sand">real-time</span> · klik tanggal untuk booking manual
+                  </p>
+                </div>
+              </div>
+
+              <RoomAvailabilityAdmin />
             </div>
           </div>
         )}
@@ -342,7 +440,7 @@ export default function AdminPage() {
         {/* ── TAB: VILLA ── */}
         {activeTab === "villa" && (
           <div className="space-y-4">
-            <h2 className="text-white font-semibold mb-4">Paket Villa & Harga</h2>
+            <h2 className="text-white font-serif text-2xl mb-4">Paket Villa &amp; Harga</h2>
             {villa.map((pkg, i) => (
               <div key={pkg.id} className="glass rounded-2xl p-6">
                 <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -408,7 +506,7 @@ export default function AdminPage() {
         {/* ── TAB: EDU TRIP ── */}
         {activeTab === "edu" && (
           <div className="space-y-4">
-            <h2 className="text-white font-semibold mb-4">Paket Edu Trip & Open Trip</h2>
+            <h2 className="text-white font-serif text-2xl mb-4">Paket Edu Trip &amp; Open Trip</h2>
             {edu.map((pkg, i) => (
               <div key={pkg.id} className="glass rounded-2xl p-6">
                 <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -474,7 +572,7 @@ export default function AdminPage() {
         {/* ── TAB: PRODUK ── */}
         {activeTab === "produk" && (
           <div className="space-y-4">
-            <h2 className="text-white font-semibold mb-4">Produk Housome Store</h2>
+            <h2 className="text-white font-serif text-2xl mb-4">Produk Housome Store</h2>
             {products.map((prod, i) => (
               <div key={prod.id} className="glass rounded-2xl p-6">
                 <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -543,7 +641,7 @@ export default function AdminPage() {
         {/* ── TAB: INFO KONTAK ── */}
         {activeTab === "info" && (
           <div className="space-y-4">
-            <h2 className="text-white font-semibold mb-4">Informasi Kontak & WhatsApp</h2>
+            <h2 className="text-white font-serif text-2xl mb-4">Informasi Kontak &amp; WhatsApp</h2>
             <div className="glass rounded-2xl p-6 space-y-4">
               <div>
                 <label className="block text-white/50 text-xs mb-1">
@@ -575,6 +673,25 @@ export default function AdminPage() {
                   https://wa.me/{waNumber}
                 </code>
               </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  onClick={handleSaveContact}
+                  disabled={savingContact}
+                  className="btn-gold px-6 py-2.5 rounded-full text-sm font-semibold flex items-center gap-2 disabled:opacity-60"
+                >
+                  <Save size={16} />
+                  {savingContact ? "Menyimpan..." : "Simpan Nomor WhatsApp"}
+                </button>
+                {contactSaved && (
+                  <span className="flex items-center gap-1.5 text-green-400 text-sm">
+                    <Check size={16} /> Tersimpan & sinkron ke seluruh halaman!
+                  </span>
+                )}
+              </div>
+              <p className="text-white/40 text-xs">
+                Nomor ini otomatis dipakai tombol WhatsApp di seluruh website (navbar, footer, tombol floating).
+              </p>
             </div>
 
             <div className="glass rounded-2xl p-6">

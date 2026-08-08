@@ -4,8 +4,6 @@ import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   Users,
-  Calendar,
-  DollarSign,
   Phone,
   CheckCircle,
   XCircle,
@@ -44,6 +42,12 @@ interface RoomWithBooking extends Room {
     check_out: string;
     total_price: number;
   };
+  active_lock?: {
+    id: string;
+    locked_by: string;
+    is_admin: boolean;
+    expires_at: string;
+  };
 }
 
 export default function CinemaRoomGridUpgraded() {
@@ -51,6 +55,10 @@ export default function CinemaRoomGridUpgraded() {
   const [loading, setLoading] = useState(true);
   const [selectedRoom, setSelectedRoom] = useState<RoomWithBooking | null>(null);
   const [showModal, setShowModal] = useState(false);
+  // Tanggal yang sedang dilihat (Blueprint #2: klik tanggal -> grid berubah)
+  const [viewDate, setViewDate] = useState<string>(
+    new Date().toISOString().split("T")[0]
+  );
 
   useEffect(() => {
     fetchRooms();
@@ -74,12 +82,21 @@ export default function CinemaRoomGridUpgraded() {
           fetchRooms();
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "room_locks" },
+        () => {
+          console.log("[Realtime] Lock changed, refreshing...");
+          fetchRooms();
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewDate]);
 
   const fetchRooms = async () => {
     try {
@@ -95,22 +112,37 @@ export default function CinemaRoomGridUpgraded() {
         return;
       }
 
-      // Get current bookings (CONFIRMED or PENDING_PAYMENT that are active)
+      // Get bookings yang aktif pada tanggal yang dipilih (viewDate)
+      // Booking aktif bila: check_in <= viewDate < check_out
       const { data: bookingsData, error: bookingsError } = await supabase
         .from("bookings")
         .select("*")
         .in("booking_status", ["PENDING_PAYMENT", "CONFIRMED", "CHECKED_IN"])
-        .lte("check_in", new Date().toISOString().split("T")[0])
-        .gte("check_out", new Date().toISOString().split("T")[0]);
+        .lte("check_in", viewDate)
+        .gt("check_out", viewDate);
 
       if (bookingsError) {
         console.error("Error fetching bookings:", bookingsError);
       }
 
-      // Merge rooms with current bookings
+      // Get active soft-locks overlapping viewDate (Module 03)
+      // Lock aktif bila: expires_at > now DAN check_in <= viewDate < check_out
+      const nowIso = new Date().toISOString();
+      const { data: locksData } = await supabase
+        .from("room_locks")
+        .select("*")
+        .gt("expires_at", nowIso)
+        .lte("check_in", viewDate)
+        .gt("check_out", viewDate);
+
+      // Merge rooms with current bookings + active locks
       const roomsWithBookings: RoomWithBooking[] = (roomsData || []).map((room) => {
         const currentBooking = (bookingsData || []).find(
           (booking) => booking.room_id === room.id
+        );
+
+        const activeLock = (locksData || []).find(
+          (lock) => lock.room_id === room.id
         );
 
         return {
@@ -128,6 +160,14 @@ export default function CinemaRoomGridUpgraded() {
                 total_price: currentBooking.total_price,
               }
             : undefined,
+          active_lock: activeLock
+            ? {
+                id: activeLock.id,
+                locked_by: activeLock.locked_by,
+                is_admin: activeLock.is_admin,
+                expires_at: activeLock.expires_at,
+              }
+            : undefined,
         };
       });
 
@@ -139,6 +179,57 @@ export default function CinemaRoomGridUpgraded() {
     }
   };
 
+  // Admin soft-lock: tahan kamar kosong untuk viewDate agar tak diserobot online
+  const handleAdminLock = async (room: RoomWithBooking) => {
+    const nextDay = new Date(viewDate + "T00:00:00");
+    nextDay.setDate(nextDay.getDate() + 1);
+    const checkOut = nextDay.toISOString().split("T")[0];
+
+    try {
+      const res = await fetch("/api/rooms/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: room.id,
+          check_in: viewDate,
+          check_out: checkOut,
+          locked_by: "admin",
+          is_admin: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.locked) {
+        // Tampilkan error spesifik dari server, bukan tebakan
+        const msg =
+          data.message ||
+          data.error ||
+          (data.details ? JSON.stringify(data.details) : null) ||
+          "Gagal menahan kamar.";
+        alert(msg);
+        return;
+      }
+      setShowModal(false);
+      fetchRooms();
+    } catch {
+      alert("Gagal menahan kamar.");
+    }
+  };
+
+  // Lepas semua soft-lock admin
+  const handleAdminUnlock = async () => {
+    try {
+      await fetch("/api/rooms/lock", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locked_by: "admin" }),
+      });
+      setShowModal(false);
+      fetchRooms();
+    } catch {
+      alert("Gagal melepas lock.");
+    }
+  };
+
   const getRoomColor = (room: RoomWithBooking): string => {
     // Priority 1: Check if there's an active booking
     if (room.current_booking) {
@@ -146,7 +237,7 @@ export default function CinemaRoomGridUpgraded() {
 
       // Kuning = Booked tapi PENDING_PAYMENT
       if (booking_status === "PENDING_PAYMENT" && payment_status === "UNPAID") {
-        return "bg-yellow-400 hover:bg-yellow-500 border-yellow-600";
+        return "bg-yellow-500/80 hover:bg-yellow-500 border-yellow-400/60";
       }
 
       // Merah = CONFIRMED (paid) or CHECKED_IN
@@ -154,26 +245,31 @@ export default function CinemaRoomGridUpgraded() {
         (booking_status === "CONFIRMED" && payment_status === "PAID") ||
         booking_status === "CHECKED_IN"
       ) {
-        return "bg-red-500 hover:bg-red-600 border-red-700";
+        return "bg-red-500/80 hover:bg-red-500 border-red-400/60";
       }
+    }
+
+    // Priority 1.5: Soft-lock aktif (ditahan sementara) = kuning
+    if (room.active_lock) {
+      return "bg-yellow-500/70 hover:bg-yellow-500 border-yellow-400/60";
     }
 
     // Priority 2: Check room status
     if (room.status === "maintenance") {
-      return "bg-orange-500 hover:bg-orange-600 border-orange-700";
+      return "bg-orange-500/80 hover:bg-orange-500 border-orange-400/60";
     }
 
     if (room.status === "blocked") {
-      return "bg-gray-500 hover:bg-gray-600 border-gray-700";
+      return "bg-white/10 hover:bg-white/20 border-white/20";
     }
 
     // Default: Hijau = Available
-    return "bg-green-500 hover:bg-green-600 border-green-700";
+    return "bg-emerald-500/80 hover:bg-emerald-500 border-emerald-400/60";
   };
 
   const getRoomIcon = (room: RoomWithBooking) => {
     if (room.current_booking) {
-      const { booking_status, payment_status } = room.current_booking;
+      const { booking_status } = room.current_booking;
 
       if (booking_status === "PENDING_PAYMENT") {
         return <Clock size={20} className="text-white" />;
@@ -189,7 +285,7 @@ export default function CinemaRoomGridUpgraded() {
     }
 
     if (room.status === "blocked") {
-      return <XCircle size={20} className="text-white" />;
+      return <XCircle size={20} className="text-white/70" />;
     }
 
     return <CheckCircle size={20} className="text-white" />;
@@ -220,6 +316,10 @@ export default function CinemaRoomGridUpgraded() {
       return "Blocked";
     }
 
+    if (room.active_lock) {
+      return room.active_lock.is_admin ? "Ditahan Admin" : "Ditahan";
+    }
+
     return "Available";
   };
 
@@ -247,39 +347,89 @@ export default function CinemaRoomGridUpgraded() {
   if (loading) {
     return (
       <div className="text-center py-12">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-        <p className="text-gray-600">Loading rooms...</p>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sand mx-auto mb-4"></div>
+        <p className="text-white/50">Memuat data kamar...</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {/* Date Picker — Blueprint #2: klik/pilih tanggal, grid langsung berubah */}
+      <div className="glass rounded-3xl p-6">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-1">
+              Tanggal Ditampilkan
+            </h3>
+            <p className="text-sm text-white/70">
+              Status kamar untuk tanggal terpilih (dari data booking real-time)
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const d = new Date(viewDate + "T00:00:00");
+                d.setDate(d.getDate() - 1);
+                setViewDate(d.toISOString().split("T")[0]);
+              }}
+              className="px-3 py-2 glass rounded-lg text-white/70 hover:text-white transition-colors"
+              aria-label="Hari sebelumnya"
+            >
+              ‹
+            </button>
+            <input
+              type="date"
+              value={viewDate}
+              onChange={(e) => setViewDate(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-sand transition-colors [color-scheme:dark]"
+            />
+            <button
+              onClick={() => {
+                const d = new Date(viewDate + "T00:00:00");
+                d.setDate(d.getDate() + 1);
+                setViewDate(d.toISOString().split("T")[0]);
+              }}
+              className="px-3 py-2 glass rounded-lg text-white/70 hover:text-white transition-colors"
+              aria-label="Hari berikutnya"
+            >
+              ›
+            </button>
+            <button
+              onClick={() => setViewDate(new Date().toISOString().split("T")[0])}
+              className="px-3 py-2 glass rounded-lg text-sand text-sm hover:bg-white/10 transition-colors"
+            >
+              Hari Ini
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Legend */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h3 className="text-sm font-semibold text-gray-700 uppercase mb-4">
-          Cinema-Style Room Status
+      <div className="glass rounded-3xl p-6">
+        <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-4">
+          Status Kamar Cinema-Style
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-green-500 rounded"></div>
-            <span className="text-sm text-gray-700">Available</span>
+            <div className="w-6 h-6 bg-emerald-500/80 rounded-md"></div>
+            <span className="text-sm text-white/70">Tersedia</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-yellow-400 rounded"></div>
-            <span className="text-sm text-gray-700">Pending Payment</span>
+            <div className="w-6 h-6 bg-yellow-500/80 rounded-md"></div>
+            <span className="text-sm text-white/70">Menunggu Bayar</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-red-500 rounded"></div>
-            <span className="text-sm text-gray-700">Confirmed/Occupied</span>
+            <div className="w-6 h-6 bg-red-500/80 rounded-md"></div>
+            <span className="text-sm text-white/70">Terkonfirmasi</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-orange-500 rounded"></div>
-            <span className="text-sm text-gray-700">Maintenance</span>
+            <div className="w-6 h-6 bg-orange-500/80 rounded-md"></div>
+            <span className="text-sm text-white/70">Maintenance</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-gray-500 rounded"></div>
-            <span className="text-sm text-gray-700">Blocked</span>
+            <div className="w-6 h-6 bg-white/10 border border-white/20 rounded-md"></div>
+            <span className="text-sm text-white/70">Diblokir</span>
           </div>
         </div>
       </div>
@@ -289,9 +439,12 @@ export default function CinemaRoomGridUpgraded() {
         {Object.entries(groupedRooms)
           .sort(([a], [b]) => parseInt(a) - parseInt(b))
           .map(([floor, floorRooms]) => (
-            <div key={floor} className="bg-white rounded-lg shadow-md p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                Floor {floor} - {floorRooms[0].room_type.toUpperCase()}
+            <div key={floor} className="glass rounded-3xl p-6">
+              <h3 className="text-lg font-serif text-white mb-4">
+                Lantai {floor}
+                <span className="text-sand/80 text-sm ml-2 capitalize font-sans">
+                  {floorRooms[0].room_type}
+                </span>
               </h3>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                 {floorRooms
@@ -302,14 +455,14 @@ export default function CinemaRoomGridUpgraded() {
                       onClick={() => handleRoomClick(room)}
                       className={`${getRoomColor(
                         room
-                      )} border-2 rounded-lg p-4 transition-all transform hover:scale-105 hover:shadow-lg cursor-pointer`}
+                      )} border rounded-xl p-4 transition-all transform hover:scale-105 hover:shadow-lg cursor-pointer`}
                     >
                       <div className="flex flex-col items-center gap-2">
                         {getRoomIcon(room)}
                         <span className="text-white font-bold text-lg">
                           {room.room_number}
                         </span>
-                        <span className="text-white text-xs text-center">
+                        <span className="text-white/90 text-xs text-center">
                           {getRoomLabel(room)}
                         </span>
                       </div>
@@ -322,15 +475,15 @@ export default function CinemaRoomGridUpgraded() {
 
       {/* Modal */}
       {showModal && selectedRoom && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b p-6 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-gray-900">
+        <div className="fixed inset-0 bg-ocean-deep/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="glass rounded-3xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-white/10">
+            <div className="sticky top-0 bg-ocean-mid/90 backdrop-blur-md border-b border-white/10 p-6 flex items-center justify-between rounded-t-3xl">
+              <h2 className="text-2xl font-serif text-white">
                 {selectedRoom.room_name}
               </h2>
               <button
                 onClick={() => setShowModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/70 hover:text-white"
               >
                 <X size={24} />
               </button>
@@ -339,35 +492,35 @@ export default function CinemaRoomGridUpgraded() {
             <div className="p-6 space-y-6">
               {/* Room Info */}
               <div>
-                <h3 className="text-sm font-semibold text-gray-500 uppercase mb-3">
-                  Room Information
+                <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">
+                  Informasi Kamar
                 </h3>
-                <div className="bg-gray-50 p-4 rounded-lg space-y-2 text-sm">
+                <div className="bg-white/5 border border-white/10 p-4 rounded-xl space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Room Number:</span>
-                    <span className="font-medium">{selectedRoom.room_number}</span>
+                    <span className="text-white/50">Nomor Kamar:</span>
+                    <span className="font-medium text-white">{selectedRoom.room_number}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Type:</span>
-                    <span className="font-medium capitalize">
+                    <span className="text-white/50">Tipe:</span>
+                    <span className="font-medium text-white capitalize">
                       {selectedRoom.room_type}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Capacity:</span>
-                    <span className="font-medium">
-                      {selectedRoom.capacity} guests
+                    <span className="text-white/50">Kapasitas:</span>
+                    <span className="font-medium text-white">
+                      {selectedRoom.capacity} tamu
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Base Price:</span>
-                    <span className="font-medium">
-                      Rp {selectedRoom.base_price.toLocaleString("id-ID")}/night
+                    <span className="text-white/50">Harga Dasar:</span>
+                    <span className="font-medium text-sand">
+                      Rp {selectedRoom.base_price.toLocaleString("id-ID")}/malam
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Status:</span>
-                    <span className="font-medium">{getRoomLabel(selectedRoom)}</span>
+                    <span className="text-white/50">Status:</span>
+                    <span className="font-medium text-white">{getRoomLabel(selectedRoom)}</span>
                   </div>
                 </div>
               </div>
@@ -375,41 +528,41 @@ export default function CinemaRoomGridUpgraded() {
               {/* Current Booking */}
               {selectedRoom.current_booking && (
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase mb-3">
-                    Current Booking
+                  <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">
+                    Booking Saat Ini
                   </h3>
-                  <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg space-y-3 text-sm">
+                  <div className="bg-ocean-teal/20 border border-ocean-teal/40 p-4 rounded-xl space-y-3 text-sm">
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-700 font-medium">Booking ID:</span>
-                      <span className="font-bold text-blue-600">
+                      <span className="text-white/70 font-medium">Booking ID:</span>
+                      <span className="font-bold text-sand">
                         {selectedRoom.current_booking.booking_id}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-700">Guest:</span>
-                      <span className="font-medium">
+                      <span className="text-white/70">Tamu:</span>
+                      <span className="font-medium text-white">
                         {selectedRoom.current_booking.guest_name}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-700">Check-in:</span>
-                      <span className="font-medium">
+                      <span className="text-white/70">Check-in:</span>
+                      <span className="font-medium text-white">
                         {new Date(
-                          selectedRoom.current_booking.check_in
+                          selectedRoom.current_booking.check_in + "T00:00:00"
                         ).toLocaleDateString("id-ID")}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-700">Check-out:</span>
-                      <span className="font-medium">
+                      <span className="text-white/70">Check-out:</span>
+                      <span className="font-medium text-white">
                         {new Date(
-                          selectedRoom.current_booking.check_out
+                          selectedRoom.current_booking.check_out + "T00:00:00"
                         ).toLocaleDateString("id-ID")}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-700">Total Price:</span>
-                      <span className="font-bold text-green-600">
+                      <span className="text-white/70">Total Harga:</span>
+                      <span className="font-bold text-emerald-400">
                         Rp{" "}
                         {selectedRoom.current_booking.total_price.toLocaleString(
                           "id-ID"
@@ -417,14 +570,14 @@ export default function CinemaRoomGridUpgraded() {
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-700">Status:</span>
+                      <span className="text-white/70">Status:</span>
                       <div className="flex gap-2">
                         <span
                           className={`px-3 py-1 rounded-full text-xs font-medium ${
                             selectedRoom.current_booking.booking_status ===
                             "CONFIRMED"
-                              ? "bg-green-100 text-green-700"
-                              : "bg-yellow-100 text-yellow-700"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                              : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/40"
                           }`}
                         >
                           {selectedRoom.current_booking.booking_status}
@@ -432,8 +585,8 @@ export default function CinemaRoomGridUpgraded() {
                         <span
                           className={`px-3 py-1 rounded-full text-xs font-medium ${
                             selectedRoom.current_booking.payment_status === "PAID"
-                              ? "bg-green-100 text-green-700"
-                              : "bg-red-100 text-red-700"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                              : "bg-red-500/20 text-red-300 border border-red-500/40"
                           }`}
                         >
                           {selectedRoom.current_booking.payment_status}
@@ -449,10 +602,10 @@ export default function CinemaRoomGridUpgraded() {
                           selectedRoom.current_booking!.guest_name
                         )
                       }
-                      className="w-full mt-3 flex items-center justify-center gap-2 py-3 bg-green-500 text-white font-medium rounded-lg hover:bg-green-600 transition-colors"
+                      className="w-full mt-3 flex items-center justify-center gap-2 py-3 bg-emerald-500/90 text-white font-medium rounded-xl hover:bg-emerald-500 transition-colors"
                     >
                       <Phone size={18} />
-                      Contact Guest via WhatsApp
+                      Hubungi Tamu via WhatsApp
                     </button>
                   </div>
                 </div>
@@ -460,11 +613,48 @@ export default function CinemaRoomGridUpgraded() {
 
               {/* No Booking */}
               {!selectedRoom.current_booking && (
-                <div className="bg-green-50 border border-green-200 p-6 rounded-lg text-center">
-                  <CheckCircle size={48} className="text-green-500 mx-auto mb-3" />
-                  <p className="text-green-700 font-medium">
-                    Room is available for booking
-                  </p>
+                <div className="space-y-4">
+                  {selectedRoom.active_lock ? (
+                    <div className="bg-yellow-500/10 border border-yellow-500/30 p-6 rounded-xl text-center">
+                      <Clock size={40} className="text-yellow-400 mx-auto mb-3" />
+                      <p className="text-yellow-300 font-medium">
+                        Kamar sedang ditahan
+                        {selectedRoom.active_lock.is_admin ? " oleh Admin" : " oleh calon tamu"}
+                      </p>
+                      <p className="text-white/40 text-xs mt-1">
+                        Berlaku sampai{" "}
+                        {new Date(selectedRoom.active_lock.expires_at).toLocaleTimeString("id-ID")}
+                      </p>
+                      {selectedRoom.active_lock.is_admin && (
+                        <button
+                          onClick={handleAdminUnlock}
+                          className="mt-4 w-full py-3 bg-white/10 text-white font-medium rounded-xl hover:bg-white/20 transition-colors"
+                        >
+                          Lepas Tahanan (Unlock)
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="bg-emerald-500/10 border border-emerald-500/30 p-6 rounded-xl text-center">
+                        <CheckCircle size={48} className="text-emerald-400 mx-auto mb-3" />
+                        <p className="text-emerald-300 font-medium">
+                          Kamar tersedia untuk dipesan
+                        </p>
+                        <p className="text-white/40 text-xs mt-1">
+                          Tanggal: {new Date(viewDate + "T00:00:00").toLocaleDateString("id-ID")}
+                        </p>
+                      </div>
+                      {/* Blueprint #5: Admin tahan kamar agar tak diserobot online */}
+                      <button
+                        onClick={() => handleAdminLock(selectedRoom)}
+                        className="w-full flex items-center justify-center gap-2 py-3 bg-yellow-500/90 text-ocean-deep font-semibold rounded-xl hover:bg-yellow-500 transition-colors"
+                      >
+                        <Clock size={18} />
+                        Tahan Kamar (Soft-Lock 10 menit)
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>

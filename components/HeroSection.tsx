@@ -60,17 +60,26 @@ export default function HeroSection() {
           initial={{ opacity: 0 }}
           animate={{ opacity: i === currentSlide ? 1 : 0 }}
           transition={{ duration: 1.2, ease: "easeInOut" }}
+          style={{ willChange: i === currentSlide ? "opacity" : "auto" }} // HOTFIX: GPU hint
         >
-          <motion.div className="absolute inset-0" style={{ y: heroY }}>
+          <motion.div 
+            className="absolute inset-0" 
+            style={{ 
+              y: heroY,
+              willChange: "transform", // HOTFIX: Force GPU compositing
+            }}
+          >
             <Image
               src={slide.image}
               alt={slide.label}
               fill
               className="object-cover"
-              priority={i === 0} // Hero pertama prioritas tinggi
-              fetchPriority={i === 0 ? "high" : "low"} // Eksplisit prioritas fetch
-              quality={85}
-              sizes="100vw" // Gambar hero full viewport
+              priority={i === 0}
+              fetchPriority={i === 0 ? "high" : "low"}
+              quality={75} // HOTFIX: Reduce quality untuk faster load (was 85)
+              sizes="100vw"
+              placeholder="blur"
+              blurDataURL="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiMwYTJhMmEiLz48L3N2Zz4=" // HOTFIX: Blur placeholder
             />
           </motion.div>
           <div className="absolute inset-0 bg-gradient-to-r from-ocean-deep/80 via-ocean-deep/40 to-transparent" />
@@ -79,7 +88,13 @@ export default function HeroSection() {
       ))}
 
       {/* Hero Content */}
-      <motion.div className="relative z-10 h-full flex items-center" style={{ opacity: heroOpacity }}>
+      <motion.div 
+        className="relative z-10 h-full flex items-center" 
+        style={{ 
+          opacity: heroOpacity,
+          willChange: "opacity", // HOTFIX: GPU compositing hint
+        }}
+      >
         <div className="max-w-6xl mx-auto px-8 sm:px-14 lg:px-24 w-full">
           <div className="max-w-2xl">
             <motion.div
@@ -87,6 +102,7 @@ export default function HeroSection() {
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6 }}
+              style={{ willChange: "opacity, transform" }} // HOTFIX: GPU hint
               className="flex items-center gap-3 mb-4"
             >
               <div className="w-8 h-px bg-sand" />
@@ -100,6 +116,7 @@ export default function HeroSection() {
               initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.8, delay: 0.1 }}
+              style={{ willChange: "opacity, transform" }} // HOTFIX: GPU hint
               className="font-serif text-5xl sm:text-6xl lg:text-7xl text-white leading-tight mb-6 whitespace-pre-line"
             >
               {heroSlides[currentSlide].title}
@@ -110,6 +127,7 @@ export default function HeroSection() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.8, delay: 0.2 }}
+              style={{ willChange: "opacity, transform" }} // HOTFIX: GPU hint
               className="text-white/70 text-base sm:text-lg font-light leading-relaxed mb-8 max-w-md"
             >
               {heroSlides[currentSlide].subtitle}
@@ -119,6 +137,7 @@ export default function HeroSection() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.8, delay: 0.3 }}
+              style={{ willChange: "opacity, transform" }} // HOTFIX: GPU hint
               className="flex flex-wrap gap-4"
             >
               <Link
